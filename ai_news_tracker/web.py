@@ -4,14 +4,17 @@ import asyncio
 import logging
 import os
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, Query, HTTPException, Path as PathParam
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .models import init_db_scoped, checkpoint_wal, Article
 from .embeddings import EmbeddingEngine
@@ -30,6 +33,16 @@ wal_checkpoint_task = None
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+class AlgorithmType(str, Enum):
+    """Valid recommendation algorithm types."""
+    FOR_YOU = "for_you"
+    EXPLORE = "explore"
+    DEEP_DIVE = "deep_dive"
+    TRENDING = "trending"
+    BALANCED = "balanced"
+    CONTRARIAN = "contrarian"
+
+
 class ArticleResponse(BaseModel):
     id: int
     title: str
@@ -45,8 +58,8 @@ class ArticleResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    article_id: int
-    liked: bool
+    article_id: int = Field(..., ge=1, description="Article ID to provide feedback for")
+    liked: bool = Field(..., description="True for like, False for dislike")
 
 
 class StatsResponse(BaseModel):
@@ -122,6 +135,38 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AI News Tracker", lifespan=lifespan)
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    """Return readable validation errors."""
+    errors = []
+    for error in exc.errors():
+        field = ".".join(str(loc) for loc in error["loc"])
+        errors.append(f"{field}: {error['msg']}")
+    return JSONResponse(
+        status_code=422,
+        content={"status": "error", "message": "Validation error", "details": errors}
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc):
+    """Return consistent error format for HTTP exceptions."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "error", "message": exc.detail}
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    """Catch-all handler for unexpected errors."""
+    logger.exception(f"Unexpected error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"status": "error", "message": "Internal server error"}
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     """Serve the main HTML page."""
@@ -134,14 +179,14 @@ def index():
 
 @app.get("/api/recommendations", response_model=List[ArticleResponse])
 def get_recommendations(
-    limit: int = Query(20, ge=1, le=100),
-    freshness_weight: float = Query(0.3, ge=0, le=1),
-    include_read: bool = Query(False),
-    algorithm: str = Query("for_you", description="Algorithm: for_you, explore, deep_dive, trending, balanced, contrarian"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of articles to return"),
+    freshness_weight: float = Query(0.3, ge=0, le=1, description="Weight for freshness vs relevance (0=relevance only, 1=freshness only)"),
+    include_read: bool = Query(False, description="Include articles already marked as read"),
+    algorithm: AlgorithmType = Query(AlgorithmType.FOR_YOU, description="Recommendation algorithm to use"),
 ):
     """Get personalized article recommendations using the specified algorithm."""
     results = recommender.get_recommendations_v2(
-        algorithm=algorithm,
+        algorithm=algorithm.value,
         limit=limit,
         include_read=include_read,
         freshness_weight=freshness_weight,
@@ -173,15 +218,15 @@ def get_algorithms():
 
 @app.get("/api/recommendations/grouped", response_model=List[ArticleGroupResponse])
 def get_recommendations_grouped(
-    limit: int = Query(20, ge=1, le=100),
-    freshness_weight: float = Query(0.3, ge=0, le=1),
-    include_read: bool = Query(False),
-    algorithm: str = Query("for_you", description="Algorithm: for_you, explore, deep_dive, trending, balanced, contrarian"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of article groups to return"),
+    freshness_weight: float = Query(0.3, ge=0, le=1, description="Weight for freshness vs relevance"),
+    include_read: bool = Query(False, description="Include articles already marked as read"),
+    algorithm: AlgorithmType = Query(AlgorithmType.FOR_YOU, description="Recommendation algorithm to use"),
     similarity_threshold: float = Query(0.75, ge=0.5, le=0.95, description="Similarity threshold for grouping (0.75 = quite similar)"),
 ):
     """Get recommendations with similar articles grouped together."""
     groups = recommender.get_recommendations_grouped(
-        algorithm=algorithm,
+        algorithm=algorithm.value,
         limit=limit,
         include_read=include_read,
         freshness_weight=freshness_weight,
@@ -219,13 +264,18 @@ def get_recommendations_grouped(
 
 @app.get("/api/topic/{query}", response_model=List[ArticleResponse])
 def search_topic(
-    query: str,
-    limit: int = Query(20, ge=1, le=100),
-    freshness_weight: float = Query(0.2, ge=0, le=1),
-    include_read: bool = Query(False),
+    query: str = PathParam(..., min_length=1, max_length=200, description="Search query (1-200 characters)"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+    freshness_weight: float = Query(0.2, ge=0, le=1, description="Weight for freshness vs relevance"),
+    include_read: bool = Query(False, description="Include articles already marked as read"),
     min_relevance: float = Query(0.25, ge=0, le=1, description="Minimum similarity threshold to filter irrelevant results"),
 ):
     """Search for articles about a specific topic."""
+    # Strip and validate query
+    query = query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Search query cannot be empty")
+
     results = recommender.search_by_topic(
         query=query,
         limit=limit,
@@ -260,18 +310,18 @@ def record_feedback(feedback: FeedbackRequest):
 
 
 @app.post("/api/read/{article_id}")
-def mark_read(article_id: int):
+def mark_read(article_id: int = PathParam(..., ge=1, description="Article ID")):
     """Mark an article as read."""
     recommender.mark_read(article_id)
     return {"status": "ok", "article_id": article_id}
 
 
 @app.get("/api/article/{article_id}")
-def get_article(article_id: int):
+def get_article(article_id: int = PathParam(..., ge=1, description="Article ID")):
     """Get full article details."""
     article = db_session.query(Article).get(article_id)
     if not article:
-        return {"error": "Article not found"}
+        raise HTTPException(status_code=404, detail="Article not found")
 
     return {
         "id": article.id,

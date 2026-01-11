@@ -480,7 +480,7 @@ class TestArticleEndpoint:
             assert data["content"] == "Full content here"
 
     def test_get_article_not_found(self, test_app):
-        """Test getting nonexistent article."""
+        """Test getting nonexistent article returns 404."""
         client, _, _ = test_app
 
         with patch("ai_news_tracker.web.db_session") as mock_session:
@@ -490,9 +490,10 @@ class TestArticleEndpoint:
 
             response = client.get("/api/article/99999")
 
-            assert response.status_code == 200
+            assert response.status_code == 404
             data = response.json()
-            assert "error" in data
+            assert data["status"] == "error"
+            assert "not found" in data["message"].lower()
 
 
 class TestStatsEndpoint:
