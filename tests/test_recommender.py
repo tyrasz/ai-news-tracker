@@ -273,7 +273,8 @@ class TestNewsRecommender:
 
         with patch("ai_news_tracker.recommender.FeedFetcher"):
             recommender = NewsRecommender(session, mock_embedding_engine)
-            results = recommender.search_by_topic("machine learning")
+            # Use min_relevance=0 since mock embeddings are random (low similarity)
+            results = recommender.search_by_topic("machine learning", min_relevance=0)
 
             assert len(results) > 0
             for article, score, freshness in results:
@@ -289,7 +290,7 @@ class TestNewsRecommender:
 
         with patch("ai_news_tracker.recommender.FeedFetcher"):
             recommender = NewsRecommender(session, mock_embedding_engine)
-            results = recommender.search_by_topic("technology", limit=2)
+            results = recommender.search_by_topic("technology", limit=2, min_relevance=0)
 
             assert len(results) <= 2
 
@@ -301,10 +302,27 @@ class TestNewsRecommender:
 
         with patch("ai_news_tracker.recommender.FeedFetcher"):
             recommender = NewsRecommender(session, mock_embedding_engine)
-            results = recommender.search_by_topic("space", include_read=False)
+            results = recommender.search_by_topic("space", include_read=False, min_relevance=0)
 
             for article, _, _ in results:
                 assert article.is_read is False
+
+    def test_search_by_topic_min_relevance_filters(
+        self, temp_db, mock_embedding_engine, sample_articles
+    ):
+        """Test that min_relevance threshold filters irrelevant articles."""
+        session, _ = temp_db
+
+        with patch("ai_news_tracker.recommender.FeedFetcher"):
+            recommender = NewsRecommender(session, mock_embedding_engine)
+
+            # With min_relevance=0, should return articles
+            results_no_filter = recommender.search_by_topic("test query", min_relevance=0)
+            assert len(results_no_filter) > 0
+
+            # With very high min_relevance, random embeddings won't pass
+            results_strict = recommender.search_by_topic("test query", min_relevance=0.9)
+            assert len(results_strict) < len(results_no_filter)
 
     def test_get_stats_empty(self, temp_db, mock_embedding_engine):
         """Test stats with empty database."""

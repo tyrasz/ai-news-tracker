@@ -274,6 +274,7 @@ class NewsRecommender:
         max_age_days: int | None = 7,
         freshness_weight: float = 0.2,
         freshness_half_life_hours: float = 24.0,
+        min_relevance: float = 0.25,
     ) -> list[tuple[Article, float, float]]:
         """
         Search for articles matching a topic/query using semantic search.
@@ -285,6 +286,9 @@ class NewsRecommender:
             max_age_days: Only consider articles from the last N days
             freshness_weight: 0-1, how much freshness matters vs relevance
             freshness_half_life_hours: Hours until freshness drops to 50%
+            min_relevance: Minimum raw cosine similarity (0-1) to include an article.
+                           Articles below this threshold are filtered out before ranking.
+                           Default 0.25 filters clearly irrelevant articles.
 
         Returns:
             List of (article, combined_score, freshness) tuples, sorted by relevance
@@ -315,8 +319,17 @@ class NewsRecommender:
         for article in candidates:
             embedding = bytes_to_embedding(article.embedding, self.embedding_engine.embedding_dim)
 
-            # Relevance = similarity to query (normalize to 0-1)
-            relevance = (self.embedding_engine.cosine_similarity(query_embedding, embedding) + 1) / 2
+            # Raw cosine similarity (-1 to 1, but typically 0 to 0.6 for text)
+            raw_similarity = self.embedding_engine.cosine_similarity(query_embedding, embedding)
+
+            # Filter out articles below minimum relevance threshold
+            # This prevents fresh but irrelevant articles from appearing
+            if raw_similarity < min_relevance:
+                continue
+
+            # Normalize relevance to 0-1 range, preserving discrimination
+            # Map [min_relevance, 1.0] -> [0, 1] so threshold articles start at 0
+            relevance = (raw_similarity - min_relevance) / (1.0 - min_relevance)
 
             # Freshness score
             freshness = self.compute_freshness(article, freshness_half_life_hours)

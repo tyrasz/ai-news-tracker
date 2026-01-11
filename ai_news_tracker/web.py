@@ -171,6 +171,7 @@ def search_topic(
     limit: int = Query(20, ge=1, le=100),
     freshness_weight: float = Query(0.2, ge=0, le=1),
     include_read: bool = Query(False),
+    min_relevance: float = Query(0.25, ge=0, le=1, description="Minimum similarity threshold to filter irrelevant results"),
 ):
     """Search for articles about a specific topic."""
     results = recommender.search_by_topic(
@@ -178,6 +179,7 @@ def search_topic(
         limit=limit,
         include_read=include_read,
         freshness_weight=freshness_weight,
+        min_relevance=min_relevance,
     )
 
     return [
