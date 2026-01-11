@@ -1,0 +1,56 @@
+[project]
+name = "ai-news-tracker"
+version = "0.1.0"
+description = "Personalized AI news crawler that learns your reading preferences"
+requires-python = ">=3.9"
+dependencies = [
+    "feedparser>=6.0.0",
+    "trafilatura>=1.6.0",
+    "sentence-transformers>=2.2.0,<3.0.0",
+    "transformers>=4.34.0,<4.40.0",
+    "numpy>=1.24.0",
+    "click>=8.0.0",
+    "rich>=13.0.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.19.0",
+    "httpx>=0.24.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "httpx>=0.24.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+news = "ai_news_tracker.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+addopts = "-v --cov=ai_news_tracker --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["ai_news_tracker"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]

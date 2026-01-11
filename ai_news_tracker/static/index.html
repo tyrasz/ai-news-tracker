@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI News Tracker</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            padding: 20px 0;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        header .container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .stats {
+            font-size: 0.85rem;
+            color: #888;
+        }
+
+        .search-bar {
+            display: flex;
+            gap: 10px;
+        }
+
+        .search-bar input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: #252525;
+            color: #fff;
+            font-size: 1rem;
+        }
+
+        .search-bar input:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+
+        .search-bar input::placeholder {
+            color: #666;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #4a9eff;
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #3a8eef;
+        }
+
+        .btn-secondary {
+            background: #333;
+            color: #fff;
+        }
+
+        .btn-secondary:hover {
+            background: #444;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .controls label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #888;
+        }
+
+        .controls input[type="range"] {
+            width: 100px;
+        }
+
+        .controls input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+        }
+
+        .articles {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .article-card {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.2s;
+        }
+
+        .article-card:hover {
+            border-color: #3a3a3a;
+            transform: translateY(-1px);
+        }
+
+        .article-card.read {
+            opacity: 0.6;
+        }
+
+        .article-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 15px;
+            margin-bottom: 10px;
+        }
+
+        .article-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+            text-decoration: none;
+            line-height: 1.4;
+        }
+
+        .article-title:hover {
+            color: #4a9eff;
+        }
+
+        .article-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 0.8rem;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .article-source {
+            color: #4a9eff;
+            font-weight: 500;
+        }
+
+        .article-summary {
+            font-size: 0.9rem;
+            color: #999;
+            margin-bottom: 15px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .article-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .scores {
+            display: flex;
+            gap: 15px;
+        }
+
+        .score {
+            font-size: 0.8rem;
+            padding: 4px 10px;
+            border-radius: 20px;
+            background: #252525;
+        }
+
+        .score.high {
+            background: #1a3d1a;
+            color: #4ade80;
+        }
+
+        .score.medium {
+            background: #3d3a1a;
+            color: #facc15;
+        }
+
+        .score.low {
+            background: #3d1a1a;
+            color: #f87171;
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .action-btn {
+            width: 36px;
+            height: 36px;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: transparent;
+            color: #666;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            transition: all 0.2s;
+        }
+
+        .action-btn:hover {
+            border-color: #555;
+            color: #999;
+        }
+
+        .action-btn.liked {
+            background: #1a3d1a;
+            border-color: #4ade80;
+            color: #4ade80;
+        }
+
+        .action-btn.disliked {
+            background: #3d1a1a;
+            border-color: #f87171;
+            color: #f87171;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #333;
+            border-top-color: #4a9eff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: #888;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #333;
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .toast.success {
+            background: #1a3d1a;
+            border: 1px solid #4ade80;
+        }
+
+        @media (max-width: 600px) {
+            .header-top {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .article-header {
+                flex-direction: column;
+            }
+
+            .article-footer {
+                flex-direction: column;
+                gap: 15px;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-top">
+                <h1>AI News Tracker</h1>
+                <div class="stats" id="stats">Loading...</div>
+            </div>
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="Search topics... (e.g., 'artificial intelligence', 'climate change')">
+                <button class="btn btn-primary" onclick="searchTopic()">Search</button>
+                <button class="btn btn-secondary" onclick="loadRecommendations()">For You</button>
+                <button class="btn btn-secondary" onclick="refreshFeeds()" id="refresh-btn" title="Fetch new articles from all sources">Refresh</button>
+            </div>
+            <div class="controls">
+                <label>
+                    Freshness:
+                    <input type="range" id="freshness" min="0" max="100" value="30" onchange="updateFreshness()">
+                    <span id="freshness-value">30%</span>
+                </label>
+                <label>
+                    <input type="checkbox" id="show-read" onchange="refresh()">
+                    Show read articles
+                </label>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="articles" id="articles">
+            <div class="loading">
+                <div class="spinner"></div>
+                Loading articles...
+            </div>
+        </div>
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let currentMode = 'recommendations';
+        let currentQuery = '';
+
+        console.log('AI News Tracker initializing...');
+
+        // Load recommendations on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOM loaded, fetching recommendations...');
+            loadRecommendations();
+            loadStats();
+        });
+
+        // Enter key to search
+        document.getElementById('search-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') searchTopic();
+        });
+
+        function updateFreshness() {
+            const value = document.getElementById('freshness').value;
+            document.getElementById('freshness-value').textContent = value + '%';
+            refresh();
+        }
+
+        function refresh() {
+            if (currentMode === 'recommendations') {
+                loadRecommendations();
+            } else {
+                searchTopic(currentQuery);
+            }
+        }
+
+        async function loadRecommendations() {
+            currentMode = 'recommendations';
+            const freshness = document.getElementById('freshness').value / 100;
+            const includeRead = document.getElementById('show-read').checked;
+
+            showLoading();
+
+            try {
+                console.log('Fetching from /api/recommendations...');
+                const response = await fetch(`/api/recommendations?limit=30&freshness_weight=${freshness}&include_read=${includeRead}`);
+                console.log('Response status:', response.status);
+                const articles = await response.json();
+                console.log('Got articles:', articles.length);
+                renderArticles(articles, 'Recommended for You');
+            } catch (error) {
+                console.error('Error loading recommendations:', error);
+                showError('Failed to load recommendations: ' + error.message);
+            }
+        }
+
+        async function searchTopic(query) {
+            query = query || document.getElementById('search-input').value.trim();
+            if (!query) {
+                loadRecommendations();
+                return;
+            }
+
+            currentMode = 'search';
+            currentQuery = query;
+            const freshness = document.getElementById('freshness').value / 100;
+            const includeRead = document.getElementById('show-read').checked;
+
+            showLoading();
+
+            try {
+                const response = await fetch(`/api/topic/${encodeURIComponent(query)}?limit=30&freshness_weight=${freshness}&include_read=${includeRead}`);
+                const articles = await response.json();
+                renderArticles(articles, `Results for "${query}"`);
+            } catch (error) {
+                showError('Failed to search');
+            }
+        }
+
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+                document.getElementById('stats').innerHTML = `
+                    ${stats.unread_articles} unread &bull;
+                    ${stats.liked_articles} liked &bull;
+                    ${stats.total_articles} total
+                `;
+            } catch (error) {
+                console.error('Failed to load stats');
+            }
+        }
+
+        async function refreshFeeds() {
+            const btn = document.getElementById('refresh-btn');
+            const originalText = btn.textContent;
+            btn.textContent = 'Refreshing...';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/api/refresh', { method: 'POST' });
+                const result = await response.json();
+
+                if (result.status === 'ok') {
+                    showToast(`Fetched ${result.new_articles} new articles`);
+                    loadStats();
+                    refresh(); // Reload current view
+                } else {
+                    showToast('Refresh failed: ' + result.message);
+                }
+            } catch (error) {
+                console.error('Failed to refresh:', error);
+                showToast('Failed to refresh feeds');
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        function renderArticles(articles, title) {
+            const container = document.getElementById('articles');
+
+            if (articles.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No articles found</h3>
+                        <p>Try a different search or adjust your filters</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = articles.map(article => `
+                <div class="article-card ${article.is_read ? 'read' : ''}" id="article-${article.id}">
+                    <div class="article-header">
+                        <a href="${article.url}" target="_blank" class="article-title" onclick="markRead(${article.id})">${escapeHtml(article.title)}</a>
+                    </div>
+                    <div class="article-meta">
+                        <span class="article-source">${article.source || 'Unknown'}</span>
+                        <span>${formatDate(article.published_at)}</span>
+                        ${article.author ? `<span>by ${article.author}</span>` : ''}
+                    </div>
+                    ${article.summary ? `<div class="article-summary">${escapeHtml(article.summary)}</div>` : ''}
+                    <div class="article-footer">
+                        <div class="scores">
+                            <span class="score ${getScoreClass(article.score)}">
+                                ${Math.round(article.score * 100)}% match
+                            </span>
+                            <span class="score ${getFreshnessClass(article.freshness)}">
+                                ${Math.round(article.freshness * 100)}% fresh
+                            </span>
+                        </div>
+                        <div class="actions">
+                            <button class="action-btn ${article.is_liked === true ? 'liked' : ''}"
+                                    onclick="feedback(${article.id}, true)" title="Like">
+                                👍
+                            </button>
+                            <button class="action-btn ${article.is_liked === false ? 'disliked' : ''}"
+                                    onclick="feedback(${article.id}, false)" title="Dislike">
+                                👎
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function feedback(articleId, liked) {
+            try {
+                await fetch('/api/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ article_id: articleId, liked })
+                });
+
+                // Update UI
+                const card = document.getElementById(`article-${articleId}`);
+                const likeBtn = card.querySelector('.action-btn:first-child');
+                const dislikeBtn = card.querySelector('.action-btn:last-child');
+
+                likeBtn.classList.remove('liked');
+                dislikeBtn.classList.remove('disliked');
+
+                if (liked) {
+                    likeBtn.classList.add('liked');
+                    showToast('Preferences updated - more like this!');
+                } else {
+                    dislikeBtn.classList.add('disliked');
+                    showToast('Preferences updated - less like this');
+                }
+
+                loadStats();
+            } catch (error) {
+                showToast('Failed to save feedback');
+            }
+        }
+
+        async function markRead(articleId) {
+            try {
+                await fetch(`/api/read/${articleId}`, { method: 'POST' });
+                const card = document.getElementById(`article-${articleId}`);
+                if (card) card.classList.add('read');
+                loadStats();
+            } catch (error) {
+                console.error('Failed to mark as read');
+            }
+        }
+
+        function showLoading() {
+            document.getElementById('articles').innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Loading articles...
+                </div>
+            `;
+        }
+
+        function showError(message) {
+            document.getElementById('articles').innerHTML = `
+                <div class="empty-state">
+                    <h3>Error</h3>
+                    <p>${message}</p>
+                </div>
+            `;
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show', 'success');
+            setTimeout(() => toast.classList.remove('show', 'success'), 2000);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatDate(isoString) {
+            if (!isoString) return 'Unknown date';
+            const date = new Date(isoString);
+            const now = new Date();
+            const diffHours = Math.floor((now - date) / (1000 * 60 * 60));
+
+            if (diffHours < 1) return 'Just now';
+            if (diffHours < 24) return `${diffHours}h ago`;
+            if (diffHours < 48) return 'Yesterday';
+            return date.toLocaleDateString();
+        }
+
+        function getScoreClass(score) {
+            if (score >= 0.6) return 'high';
+            if (score >= 0.4) return 'medium';
+            return 'low';
+        }
+
+        function getFreshnessClass(freshness) {
+            if (freshness >= 0.7) return 'high';
+            if (freshness >= 0.3) return 'medium';
+            return 'low';
+        }
+    </script>
+</body>
+</html>
