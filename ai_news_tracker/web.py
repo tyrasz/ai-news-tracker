@@ -1,24 +1,31 @@
 """Web frontend for AI News Tracker."""
 
+import asyncio
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
-from fastapi import FastAPI, Query
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .models import init_db, Article
+from .models import init_db_scoped, checkpoint_wal, Article
 from .embeddings import EmbeddingEngine
 from .preferences import PreferenceLearner
 from .recommender import NewsRecommender
 
-app = FastAPI(title="AI News Tracker")
+logger = logging.getLogger(__name__)
 
 # Global instances (initialized on startup)
 recommender = None
 db_session = None
+engine = None
+_scoped_session = None
+wal_checkpoint_task = None
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -59,15 +66,60 @@ class ArticleGroupResponse(BaseModel):
     sources: List[str]
 
 
-@app.on_event("startup")
-def startup():
-    global recommender, db_session
+async def periodic_wal_checkpoint():
+    """Periodically checkpoint WAL to prevent unbounded growth."""
+    while True:
+        await asyncio.sleep(300)  # Every 5 minutes
+        try:
+            checkpoint_wal(engine)
+            logger.debug("Periodic WAL checkpoint completed")
+        except Exception as e:
+            logger.warning(f"WAL checkpoint failed: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for startup/shutdown."""
+    global recommender, db_session, engine, _scoped_session, wal_checkpoint_task
+
+    # Startup
     db_path = os.environ.get("NEWS_DB_PATH", "news_tracker.db")
-    engine, Session = init_db(db_path)
-    db_session = Session()
+    engine, _scoped_session = init_db_scoped(db_path)
+    db_session = _scoped_session()
     embedding_engine = EmbeddingEngine()
     preference_learner = PreferenceLearner(embedding_engine)
     recommender = NewsRecommender(db_session, embedding_engine, preference_learner)
+
+    # Start background WAL checkpoint task
+    wal_checkpoint_task = asyncio.create_task(periodic_wal_checkpoint())
+    logger.info(f"Started web server with database: {db_path}")
+
+    yield
+
+    # Shutdown
+    if wal_checkpoint_task:
+        wal_checkpoint_task.cancel()
+        try:
+            await wal_checkpoint_task
+        except asyncio.CancelledError:
+            pass
+
+    # Final WAL checkpoint on shutdown
+    try:
+        checkpoint_wal(engine)
+    except Exception as e:
+        logger.warning(f"Final WAL checkpoint failed: {e}")
+
+    # Clean up session
+    if db_session:
+        db_session.close()
+    if _scoped_session:
+        _scoped_session.remove()
+
+    logger.info("Web server shutdown complete")
+
+
+app = FastAPI(title="AI News Tracker", lifespan=lifespan)
 
 
 @app.get("/", response_class=HTMLResponse)

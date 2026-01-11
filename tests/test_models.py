@@ -9,7 +9,18 @@ from datetime import datetime
 import pytest
 from sqlalchemy import text
 
-from ai_news_tracker.models import init_db, Article, FeedSource, UserProfile, Base
+from ai_news_tracker.models import (
+    init_db,
+    init_db_scoped,
+    get_session,
+    checkpoint_wal,
+    retry_on_db_error,
+    Article,
+    FeedSource,
+    UserProfile,
+    Base,
+)
+from sqlalchemy.exc import OperationalError
 
 
 class TestInitDb:
@@ -290,3 +301,169 @@ class TestUserProfileModel:
         # Note: SQLAlchemy's onupdate may not trigger for all cases
         # This test verifies the column exists and works
         assert profile.updated_at is not None
+
+
+class TestDatabaseResilience:
+    """Tests for database connection resilience features."""
+
+    def test_init_db_scoped_returns_scoped_session(self):
+        """Test that init_db_scoped returns a scoped session."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        try:
+            engine, ScopedSession = init_db_scoped(db_path)
+
+            # Scoped session should be callable and return same session in same thread
+            session1 = ScopedSession()
+            session2 = ScopedSession()
+            assert session1 is session2
+
+            ScopedSession.remove()
+            engine.dispose()
+        finally:
+            os.unlink(db_path)
+
+    def test_get_session_context_manager(self):
+        """Test get_session context manager commits on success."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        try:
+            engine, Session = init_db(db_path)
+
+            # Use context manager to add data
+            with get_session(Session) as session:
+                source = FeedSource(name="Test", url="https://test.com")
+                session.add(source)
+
+            # Data should be committed
+            with get_session(Session) as session:
+                count = session.query(FeedSource).count()
+                assert count == 1
+
+            engine.dispose()
+        finally:
+            os.unlink(db_path)
+
+    def test_get_session_rolls_back_on_error(self):
+        """Test get_session context manager rolls back on error."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        try:
+            engine, Session = init_db(db_path)
+
+            # Add initial data
+            with get_session(Session) as session:
+                source = FeedSource(name="Initial", url="https://initial.com")
+                session.add(source)
+
+            # Try to add duplicate (will fail)
+            try:
+                with get_session(Session) as session:
+                    # Add valid data first
+                    source2 = FeedSource(name="Test2", url="https://test2.com")
+                    session.add(source2)
+                    session.flush()
+
+                    # Now add duplicate URL (should fail)
+                    source3 = FeedSource(name="Duplicate", url="https://initial.com")
+                    session.add(source3)
+                    # Commit happens automatically, will raise error
+            except Exception:
+                pass  # Expected
+
+            # Only initial data should exist (Test2 should be rolled back)
+            with get_session(Session) as session:
+                count = session.query(FeedSource).count()
+                assert count == 1
+
+            engine.dispose()
+        finally:
+            os.unlink(db_path)
+
+    def test_checkpoint_wal(self):
+        """Test WAL checkpoint function."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        try:
+            engine, Session = init_db(db_path)
+
+            # Add some data to create WAL activity
+            with get_session(Session) as session:
+                for i in range(10):
+                    session.add(FeedSource(name=f"Feed {i}", url=f"https://feed{i}.com"))
+
+            # Checkpoint should not raise
+            checkpoint_wal(engine)
+
+            engine.dispose()
+        finally:
+            os.unlink(db_path)
+
+    def test_retry_on_db_error_decorator(self):
+        """Test retry decorator retries on transient errors."""
+        call_count = 0
+
+        @retry_on_db_error(max_retries=3, delay=0.01)
+        def flaky_function():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise OperationalError("database is locked", None, None)
+            return "success"
+
+        result = flaky_function()
+        assert result == "success"
+        assert call_count == 3
+
+    def test_retry_on_db_error_gives_up_after_max_retries(self):
+        """Test retry decorator gives up after max retries."""
+        call_count = 0
+
+        @retry_on_db_error(max_retries=2, delay=0.01)
+        def always_fails():
+            nonlocal call_count
+            call_count += 1
+            raise OperationalError("database is locked", None, None)
+
+        with pytest.raises(OperationalError):
+            always_fails()
+
+        assert call_count == 2
+
+    def test_retry_on_db_error_does_not_retry_non_transient(self):
+        """Test retry decorator does not retry non-transient errors."""
+        call_count = 0
+
+        @retry_on_db_error(max_retries=3, delay=0.01)
+        def non_transient_error():
+            nonlocal call_count
+            call_count += 1
+            raise OperationalError("some other error", None, None)
+
+        with pytest.raises(OperationalError):
+            non_transient_error()
+
+        assert call_count == 1  # No retries
+
+    def test_connection_pool_configuration(self):
+        """Test that connection pool is properly configured."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        try:
+            engine, Session = init_db(db_path)
+
+            # Check pool configuration
+            pool = engine.pool
+            assert pool.size() == 5  # pool_size
+            # overflow() returns negative when pool has capacity remaining
+            # max_overflow=10 means total capacity is 15 (5 + 10)
+            assert pool.overflow() <= 10
+
+            engine.dispose()
+        finally:
+            os.unlink(db_path)

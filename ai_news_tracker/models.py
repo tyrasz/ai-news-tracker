@@ -1,10 +1,18 @@
 """Database models for storing articles and user preferences."""
 
+from contextlib import contextmanager
 from datetime import datetime
-from sqlalchemy import create_engine, event, Column, Integer, String, Text, Float, DateTime, Boolean, LargeBinary
-from sqlalchemy.orm import declarative_base, sessionmaker
+from functools import wraps
+import logging
+import time
+
+from sqlalchemy import create_engine, event, text, Column, Integer, String, Text, Float, DateTime, Boolean, LargeBinary
+from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
+from sqlalchemy.pool import QueuePool
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 Base = declarative_base()
+logger = logging.getLogger(__name__)
 
 
 def _set_sqlite_pragma(dbapi_connection, connection_record):
@@ -87,9 +95,51 @@ class FeedSource(Base):
         return f"<FeedSource {self.name}>"
 
 
+def retry_on_db_error(max_retries: int = 3, delay: float = 0.1):
+    """
+    Decorator that retries database operations on transient errors.
+
+    Handles SQLite locking issues and connection problems with exponential backoff.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except OperationalError as e:
+                    last_error = e
+                    error_msg = str(e).lower()
+                    # Retry on transient errors
+                    if any(err in error_msg for err in ['locked', 'busy', 'timeout']):
+                        wait_time = delay * (2 ** attempt)
+                        logger.warning(f"Database locked, retrying in {wait_time:.2f}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    raise
+                except SQLAlchemyError:
+                    raise
+            raise last_error
+        return wrapper
+    return decorator
+
+
 def init_db(db_path: str = "news_tracker.db"):
-    """Initialize the database and return engine + session factory."""
-    engine = create_engine(f"sqlite:///{db_path}")
+    """
+    Initialize the database and return engine + session factory.
+
+    Configures connection pooling, WAL mode, and other optimizations.
+    """
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        poolclass=QueuePool,
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_pre_ping=True,  # Verify connections before use
+        connect_args={"check_same_thread": False},  # Allow multi-threaded access
+    )
 
     # Register SQLite optimizations (WAL mode, etc.)
     event.listen(engine, "connect", _set_sqlite_pragma)
@@ -97,3 +147,50 @@ def init_db(db_path: str = "news_tracker.db"):
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     return engine, Session
+
+
+def init_db_scoped(db_path: str = "news_tracker.db"):
+    """
+    Initialize database with thread-safe scoped sessions.
+
+    Use this for multi-threaded applications like web servers.
+    Returns engine and a scoped session factory.
+    """
+    engine, Session = init_db(db_path)
+    ScopedSession = scoped_session(Session)
+    return engine, ScopedSession
+
+
+@contextmanager
+def get_session(Session):
+    """
+    Context manager for database sessions with automatic cleanup.
+
+    Usage:
+        engine, Session = init_db()
+        with get_session(Session) as session:
+            articles = session.query(Article).all()
+
+    Automatically commits on success, rolls back on error, and closes session.
+    """
+    session = Session()
+    try:
+        yield session
+        session.commit()
+    except SQLAlchemyError as e:
+        session.rollback()
+        logger.error(f"Database error: {e}")
+        raise
+    finally:
+        session.close()
+
+
+def checkpoint_wal(engine):
+    """
+    Checkpoint the WAL file to prevent unbounded growth.
+
+    Call this periodically in long-running applications.
+    """
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+        logger.debug("WAL checkpoint completed")
