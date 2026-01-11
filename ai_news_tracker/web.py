@@ -51,6 +51,14 @@ class StatsResponse(BaseModel):
     has_preferences: bool
 
 
+class ArticleGroupResponse(BaseModel):
+    """A group of similar articles about the same story."""
+    primary: ArticleResponse
+    related: List[ArticleResponse]
+    count: int
+    sources: List[str]
+
+
 @app.on_event("startup")
 def startup():
     global recommender, db_session
@@ -109,6 +117,52 @@ def get_recommendations(
 def get_algorithms():
     """List available recommendation algorithms."""
     return recommender.list_algorithms()
+
+
+@app.get("/api/recommendations/grouped", response_model=List[ArticleGroupResponse])
+def get_recommendations_grouped(
+    limit: int = Query(20, ge=1, le=100),
+    freshness_weight: float = Query(0.3, ge=0, le=1),
+    include_read: bool = Query(False),
+    algorithm: str = Query("for_you", description="Algorithm: for_you, explore, deep_dive, trending, balanced, contrarian"),
+    similarity_threshold: float = Query(0.75, ge=0.5, le=0.95, description="Similarity threshold for grouping (0.75 = quite similar)"),
+):
+    """Get recommendations with similar articles grouped together."""
+    groups = recommender.get_recommendations_grouped(
+        algorithm=algorithm,
+        limit=limit,
+        include_read=include_read,
+        freshness_weight=freshness_weight,
+        similarity_threshold=similarity_threshold,
+    )
+
+    def article_to_response(article, score, freshness):
+        return ArticleResponse(
+            id=article.id,
+            title=article.title,
+            url=article.url,
+            source=article.source,
+            author=article.author,
+            summary=_clean_summary(article.summary),
+            published_at=article.published_at.isoformat() if article.published_at else None,
+            score=score,
+            freshness=freshness,
+            is_read=article.is_read or False,
+            is_liked=article.is_liked,
+        )
+
+    return [
+        ArticleGroupResponse(
+            primary=article_to_response(group.primary, group.primary_score, group.primary_freshness),
+            related=[
+                article_to_response(article, score, freshness)
+                for article, score, freshness in group.related
+            ],
+            count=group.count,
+            sources=group.sources,
+        )
+        for group in groups
+    ]
 
 
 @app.get("/api/topic/{query}", response_model=List[ArticleResponse])

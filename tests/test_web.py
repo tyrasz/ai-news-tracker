@@ -225,6 +225,100 @@ class TestAlgorithmsEndpoint:
         assert data[0]["id"] == "for_you"
 
 
+class TestGroupedRecommendationsEndpoint:
+    """Tests for the grouped recommendations endpoint."""
+
+    def test_get_grouped_recommendations(self, test_app):
+        """Test getting grouped recommendations."""
+        client, mock_recommender, _ = test_app
+
+        # Create mock article group
+        from ai_news_tracker.clustering import ArticleGroup
+
+        mock_primary = MagicMock()
+        mock_primary.id = 1
+        mock_primary.title = "Breaking News"
+        mock_primary.url = "https://example.com/news1"
+        mock_primary.source = "Source A"
+        mock_primary.author = None
+        mock_primary.summary = "Summary"
+        mock_primary.published_at = datetime.utcnow()
+        mock_primary.is_read = False
+        mock_primary.is_liked = None
+
+        mock_related = MagicMock()
+        mock_related.id = 2
+        mock_related.title = "Same Story Different Source"
+        mock_related.url = "https://example.com/news2"
+        mock_related.source = "Source B"
+        mock_related.author = None
+        mock_related.summary = "Related summary"
+        mock_related.published_at = datetime.utcnow()
+        mock_related.is_read = False
+        mock_related.is_liked = None
+
+        mock_group = ArticleGroup(
+            primary=mock_primary,
+            primary_score=0.9,
+            primary_freshness=0.8,
+            related=[(mock_related, 0.85, 0.75)],
+        )
+
+        mock_recommender.get_recommendations_grouped.return_value = [mock_group]
+
+        response = client.get("/api/recommendations/grouped")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 1
+
+        group = data[0]
+        assert group["count"] == 2
+        assert "Source A" in group["sources"]
+        assert "Source B" in group["sources"]
+        assert group["primary"]["title"] == "Breaking News"
+        assert len(group["related"]) == 1
+        assert group["related"][0]["title"] == "Same Story Different Source"
+
+    def test_get_grouped_recommendations_with_params(self, test_app):
+        """Test grouped recommendations with query parameters."""
+        client, mock_recommender, _ = test_app
+        mock_recommender.get_recommendations_grouped.return_value = []
+
+        response = client.get(
+            "/api/recommendations/grouped",
+            params={
+                "limit": 10,
+                "freshness_weight": 0.5,
+                "include_read": True,
+                "algorithm": "trending",
+                "similarity_threshold": 0.8,
+            }
+        )
+
+        assert response.status_code == 200
+        mock_recommender.get_recommendations_grouped.assert_called_once_with(
+            algorithm="trending",
+            limit=10,
+            include_read=True,
+            freshness_weight=0.5,
+            similarity_threshold=0.8,
+        )
+
+    def test_grouped_similarity_threshold_validation(self, test_app):
+        """Test that similarity threshold is validated."""
+        client, _, _ = test_app
+
+        # Too low
+        response = client.get("/api/recommendations/grouped", params={"similarity_threshold": 0.4})
+        assert response.status_code == 422
+
+        # Too high
+        response = client.get("/api/recommendations/grouped", params={"similarity_threshold": 0.99})
+        assert response.status_code == 422
+
+
 class TestTopicSearchEndpoint:
     """Tests for the topic search endpoint."""
 

@@ -365,6 +365,95 @@
             min-height: 20px;
         }
 
+        /* Grouped articles styles */
+        .article-group {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .article-group.has-related {
+            border-color: #3a3a3a;
+        }
+
+        .group-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #2a3a4a;
+            color: #7ab8ff;
+            font-size: 0.75rem;
+            padding: 3px 8px;
+            border-radius: 12px;
+            margin-left: 8px;
+        }
+
+        .related-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 20px;
+            background: #151515;
+            border-top: 1px solid #2a2a2a;
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: #888;
+            transition: background 0.2s;
+        }
+
+        .related-toggle:hover {
+            background: #1a1a1a;
+            color: #aaa;
+        }
+
+        .related-toggle .sources {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .related-toggle .source-tag {
+            background: #252525;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.75rem;
+        }
+
+        .related-toggle .arrow {
+            transition: transform 0.2s;
+        }
+
+        .related-toggle.expanded .arrow {
+            transform: rotate(180deg);
+        }
+
+        .related-articles {
+            display: none;
+            background: #121212;
+            border-top: 1px solid #2a2a2a;
+        }
+
+        .related-articles.expanded {
+            display: block;
+        }
+
+        .related-articles .article-card {
+            border-radius: 0;
+            border: none;
+            border-bottom: 1px solid #1a1a1a;
+            background: transparent;
+            padding: 15px 20px;
+        }
+
+        .related-articles .article-card:last-child {
+            border-bottom: none;
+        }
+
+        .related-articles .article-title {
+            font-size: 0.95rem;
+        }
+
         @media (max-width: 600px) {
             .header-top {
                 flex-direction: column;
@@ -427,6 +516,10 @@
                     Freshness:
                     <input type="range" id="freshness" min="0" max="100" value="30" onchange="updateFreshness()">
                     <span id="freshness-value">30%</span>
+                </label>
+                <label>
+                    <input type="checkbox" id="group-similar" checked onchange="refresh()">
+                    Group similar stories
                 </label>
                 <label>
                     <input type="checkbox" id="show-read" onchange="refresh()">
@@ -521,17 +614,26 @@
             currentMode = 'recommendations';
             const freshness = document.getElementById('freshness').value / 100;
             const includeRead = document.getElementById('show-read').checked;
+            const groupSimilar = document.getElementById('group-similar').checked;
 
             showLoading();
 
             try {
-                console.log(`Fetching from /api/recommendations with algorithm=${currentAlgorithm}...`);
-                const response = await fetch(`/api/recommendations?limit=30&freshness_weight=${freshness}&include_read=${includeRead}&algorithm=${currentAlgorithm}`);
-                console.log('Response status:', response.status);
-                const articles = await response.json();
-                console.log('Got articles:', articles.length);
                 const title = algorithmTitles[currentAlgorithm] || 'Recommendations';
-                renderArticles(articles, title);
+
+                if (groupSimilar) {
+                    console.log(`Fetching grouped from /api/recommendations/grouped with algorithm=${currentAlgorithm}...`);
+                    const response = await fetch(`/api/recommendations/grouped?limit=30&freshness_weight=${freshness}&include_read=${includeRead}&algorithm=${currentAlgorithm}`);
+                    const groups = await response.json();
+                    console.log('Got article groups:', groups.length);
+                    renderArticleGroups(groups, title);
+                } else {
+                    console.log(`Fetching from /api/recommendations with algorithm=${currentAlgorithm}...`);
+                    const response = await fetch(`/api/recommendations?limit=30&freshness_weight=${freshness}&include_read=${includeRead}&algorithm=${currentAlgorithm}`);
+                    const articles = await response.json();
+                    console.log('Got articles:', articles.length);
+                    renderArticles(articles, title);
+                }
             } catch (error) {
                 console.error('Error loading recommendations:', error);
                 showError('Failed to load recommendations: ' + error.message);
@@ -614,7 +716,11 @@
                 return;
             }
 
-            container.innerHTML = articles.map(article => `
+            container.innerHTML = articles.map(article => renderArticleCard(article)).join('');
+        }
+
+        function renderArticleCard(article, isRelated = false) {
+            return `
                 <div class="article-card ${article.is_read ? 'read' : ''}" id="article-${article.id}">
                     <div class="article-header">
                         <a href="${article.url}" target="_blank" class="article-title" onclick="markRead(${article.id})">${escapeHtml(article.title)}</a>
@@ -646,7 +752,90 @@
                         </div>
                     </div>
                 </div>
-            `).join('');
+            `;
+        }
+
+        function renderArticleGroups(groups, title) {
+            const container = document.getElementById('articles');
+
+            if (groups.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No articles found</h3>
+                        <p>Try a different search or adjust your filters</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = groups.map((group, index) => {
+                const hasRelated = group.related && group.related.length > 0;
+                const groupId = `group-${index}`;
+
+                if (!hasRelated) {
+                    // Single article, no grouping needed
+                    return renderArticleCard(group.primary);
+                }
+
+                // Group with related articles
+                return `
+                    <div class="article-group has-related" id="${groupId}">
+                        <div class="article-card" id="article-${group.primary.id}">
+                            <div class="article-header">
+                                <a href="${group.primary.url}" target="_blank" class="article-title" onclick="markRead(${group.primary.id})">
+                                    ${escapeHtml(group.primary.title)}
+                                </a>
+                                <span class="group-badge">
+                                    ${group.count} sources
+                                </span>
+                            </div>
+                            <div class="article-meta">
+                                <span class="article-source">${group.primary.source || 'Unknown'}</span>
+                                <span>${formatDate(group.primary.published_at)}</span>
+                                ${group.primary.author ? `<span>by ${group.primary.author}</span>` : ''}
+                            </div>
+                            ${group.primary.summary ? `<div class="article-summary">${escapeHtml(group.primary.summary)}</div>` : ''}
+                            <div class="article-footer">
+                                <div class="scores">
+                                    <span class="score ${getScoreClass(group.primary.score)}">
+                                        ${Math.round(group.primary.score * 100)}% match
+                                    </span>
+                                    <span class="score ${getFreshnessClass(group.primary.freshness)}">
+                                        ${Math.round(group.primary.freshness * 100)}% fresh
+                                    </span>
+                                </div>
+                                <div class="actions">
+                                    <button class="action-btn ${group.primary.is_liked === true ? 'liked' : ''}"
+                                            onclick="feedback(${group.primary.id}, true)" title="Like">
+                                        👍
+                                    </button>
+                                    <button class="action-btn ${group.primary.is_liked === false ? 'disliked' : ''}"
+                                            onclick="feedback(${group.primary.id}, false)" title="Dislike">
+                                        👎
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="related-toggle" onclick="toggleRelated('${groupId}')">
+                            <div class="sources">
+                                Also from: ${group.sources.slice(1).map(s => `<span class="source-tag">${escapeHtml(s)}</span>`).join('')}
+                            </div>
+                            <span class="arrow">▼</span>
+                        </div>
+                        <div class="related-articles" id="${groupId}-related">
+                            ${group.related.map(article => renderArticleCard(article, true)).join('')}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleRelated(groupId) {
+            const toggle = document.querySelector(`#${groupId} .related-toggle`);
+            const related = document.getElementById(`${groupId}-related`);
+
+            toggle.classList.toggle('expanded');
+            related.classList.toggle('expanded');
         }
 
         async function feedback(articleId, liked) {

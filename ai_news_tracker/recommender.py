@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
@@ -18,6 +20,8 @@ from .algorithms import (
     list_algorithms,
     ScoredArticle,
 )
+from .clustering import cluster_similar_articles, ArticleGroup
+from .reranker import Reranker, RerankerConfig
 
 
 class NewsRecommender:
@@ -26,6 +30,7 @@ class NewsRecommender:
     - Article fetching from feeds
     - Embedding generation
     - Preference-based ranking
+    - Neural re-ranking (when trained)
     - Diversity injection
     """
 
@@ -34,11 +39,22 @@ class NewsRecommender:
         db_session: Session,
         embedding_engine: EmbeddingEngine | None = None,
         preference_learner: PreferenceLearner | None = None,
+        reranker_dir: Path | str | None = None,
+        use_reranker: bool = True,
     ):
         self.db = db_session
         self.embedding_engine = embedding_engine or EmbeddingEngine()
         self.preference_learner = preference_learner or PreferenceLearner(self.embedding_engine)
         self.fetcher = FeedFetcher()
+
+        # Initialize re-ranker if enabled
+        self.reranker: Optional[Reranker] = None
+        if use_reranker:
+            reranker_path = Path(reranker_dir) if reranker_dir else Path.home() / ".news_tracker" / "reranker"
+            self.reranker = Reranker(
+                model_dir=reranker_path,
+                config=RerankerConfig(embedding_dim=self.embedding_engine.embedding_dim),
+            )
 
     def ingest_from_feed(
         self,
@@ -225,7 +241,15 @@ class NewsRecommender:
         """Record user feedback (like/dislike) on an article."""
         article = self.db.query(Article).get(article_id)
         if article:
+            # Update preference learner (existing behavior)
             self.preference_learner.update_profile(self.db, article, liked, profile_name)
+
+            # Also feed the re-ranker if available
+            if self.reranker and article.embedding:
+                user_pref = self.preference_learner.get_preference_embedding(self.db, profile_name)
+                if user_pref is not None:
+                    article_emb = bytes_to_embedding(article.embedding, self.embedding_engine.embedding_dim)
+                    self.reranker.add_feedback(article_emb, user_pref, liked)
 
     def mark_read(self, article_id: int) -> None:
         """Mark an article as read without explicit like/dislike."""
@@ -335,6 +359,8 @@ class NewsRecommender:
         max_age_days: int = 7,
         freshness_weight: float = 0.3,
         freshness_half_life_hours: float = 24.0,
+        use_reranker: bool = True,
+        reranker_blend: float = 0.3,
     ) -> list[tuple[Article, float, float]]:
         """
         Get recommendations using a specific algorithm.
@@ -347,6 +373,8 @@ class NewsRecommender:
             max_age_days: Only consider articles from the last N days
             freshness_weight: 0-1, how much freshness matters vs relevance
             freshness_half_life_hours: Hours until freshness drops to 50%
+            use_reranker: If True and reranker is trained, apply neural re-ranking
+            reranker_blend: 0-1, how much to weight reranker vs original score
 
         Returns:
             List of (article, combined_score, freshness) tuples, sorted by score
@@ -379,6 +407,24 @@ class NewsRecommender:
         # Score articles using the selected algorithm
         scored_articles = algo.score_articles(candidates, preference)
 
+        # Apply neural re-ranking if available and trained
+        if (use_reranker and self.reranker and self.reranker.is_trained
+                and preference is not None):
+            # Prepare data for reranker
+            articles_with_embeddings = []
+            for sa in scored_articles[:limit * 2]:  # Get more for reranking
+                if sa.article.embedding:
+                    emb = bytes_to_embedding(sa.article.embedding, self.embedding_engine.embedding_dim)
+                    articles_with_embeddings.append((sa.article, sa.final_score, sa.freshness_score, emb))
+
+            # Re-rank
+            reranked = self.reranker.rerank(
+                articles_with_embeddings,
+                preference,
+                blend_weight=reranker_blend,
+            )
+            return reranked[:limit]
+
         # Convert to legacy format and limit
         return [
             (sa.article, sa.final_score, sa.freshness_score)
@@ -388,3 +434,78 @@ class NewsRecommender:
     def list_algorithms(self) -> list[dict]:
         """List all available recommendation algorithms."""
         return list_algorithms()
+
+    def get_recommendations_grouped(
+        self,
+        algorithm: str = "for_you",
+        limit: int = 20,
+        profile_name: str = "default",
+        include_read: bool = False,
+        max_age_days: int = 7,
+        freshness_weight: float = 0.3,
+        freshness_half_life_hours: float = 24.0,
+        similarity_threshold: float = 0.75,
+    ) -> list[ArticleGroup]:
+        """
+        Get recommendations with similar articles grouped together.
+
+        Args:
+            algorithm: Algorithm to use
+            limit: Maximum number of article groups to return
+            profile_name: User profile for personalization
+            include_read: If True, include articles already marked as read
+            max_age_days: Only consider articles from the last N days
+            freshness_weight: 0-1, how much freshness matters vs relevance
+            freshness_half_life_hours: Hours until freshness drops to 50%
+            similarity_threshold: 0-1, minimum similarity to group articles (0.75 = similar)
+
+        Returns:
+            List of ArticleGroups, each containing a primary article and related articles
+        """
+        # Get more articles than limit since some will be grouped
+        raw_results = self.get_recommendations_v2(
+            algorithm=algorithm,
+            limit=limit * 3,  # Fetch extra to account for grouping
+            profile_name=profile_name,
+            include_read=include_read,
+            max_age_days=max_age_days,
+            freshness_weight=freshness_weight,
+            freshness_half_life_hours=freshness_half_life_hours,
+        )
+
+        # Cluster similar articles
+        groups = cluster_similar_articles(
+            raw_results,
+            self.embedding_engine,
+            similarity_threshold=similarity_threshold,
+        )
+
+        return groups[:limit]
+
+    def train_reranker(self, verbose: bool = True) -> dict:
+        """
+        Train the neural re-ranker on collected user feedback.
+
+        Returns:
+            Training metrics (samples, accuracy, loss)
+        """
+        if not self.reranker:
+            raise ValueError("Re-ranker is not enabled")
+
+        if not self.reranker.can_train():
+            stats = self.reranker.get_stats()
+            raise ValueError(
+                f"Need at least {stats['min_samples_required']} feedback samples to train, "
+                f"but only have {stats['feedback_samples']}. Keep liking/disliking articles!"
+            )
+
+        return self.reranker.train(verbose=verbose)
+
+    def get_reranker_stats(self) -> dict:
+        """Get re-ranker training status and statistics."""
+        if not self.reranker:
+            return {"enabled": False}
+
+        stats = self.reranker.get_stats()
+        stats["enabled"] = True
+        return stats

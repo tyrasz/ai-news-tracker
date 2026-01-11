@@ -354,5 +354,190 @@ def serve(ctx, host, port):
     run_server(host=host, port=port, db_path=db_path)
 
 
+# =============================================================================
+# Re-ranker Commands
+# =============================================================================
+
+@main.group()
+def reranker():
+    """Manage the neural re-ranker model."""
+    pass
+
+
+@reranker.command("status")
+@click.pass_context
+def reranker_status(ctx):
+    """Show re-ranker training status."""
+    recommender, session = get_recommender(ctx.obj["db_path"])
+    stats = recommender.get_reranker_stats()
+
+    if not stats.get("enabled"):
+        console.print("[yellow]Re-ranker is not enabled[/yellow]")
+        return
+
+    panel_content = f"""[bold]Re-ranker Status[/bold]
+  PyTorch available: {'[green]Yes[/green]' if stats.get('pytorch_available') else '[red]No[/red]'}
+  Feedback samples: {stats.get('feedback_samples', 0)}
+  Minimum samples needed: {stats.get('min_samples_required', 10)}
+  Can train: {'[green]Yes[/green]' if stats.get('can_train') else '[yellow]No - need more feedback[/yellow]'}
+  Model trained: {'[green]Yes[/green]' if stats.get('is_trained') else '[dim]Not yet[/dim]'}"""
+
+    console.print(Panel(panel_content, title="Neural Re-ranker"))
+
+    if not stats.get('is_trained') and not stats.get('can_train'):
+        needed = stats.get('min_samples_required', 10) - stats.get('feedback_samples', 0)
+        console.print(f"\n[dim]Like/dislike {needed} more articles to enable training[/dim]")
+
+
+@reranker.command("train")
+@click.pass_context
+def reranker_train(ctx):
+    """Train the re-ranker on your feedback."""
+    recommender, session = get_recommender(ctx.obj["db_path"])
+    stats = recommender.get_reranker_stats()
+
+    if not stats.get("enabled"):
+        console.print("[red]Re-ranker is not enabled[/red]")
+        return
+
+    if not stats.get("pytorch_available"):
+        console.print("[red]PyTorch is required for training. Install with: pip install torch[/red]")
+        return
+
+    if not stats.get("can_train"):
+        needed = stats.get('min_samples_required', 10) - stats.get('feedback_samples', 0)
+        console.print(f"[yellow]Need {needed} more feedback samples before training[/yellow]")
+        console.print("[dim]Like/dislike more articles to collect training data[/dim]")
+        return
+
+    console.print("[cyan]Training re-ranker on your feedback...[/cyan]\n")
+
+    try:
+        results = recommender.train_reranker(verbose=True)
+        console.print(f"\n[green]Training complete![/green]")
+        console.print(f"  Samples used: {results['samples']}")
+        console.print(f"  Final accuracy: {results['final_accuracy']:.1%}")
+        console.print(f"  Best validation loss: {results['best_val_loss']:.4f}")
+        console.print("\n[dim]The re-ranker will now be used to personalize your recommendations[/dim]")
+    except Exception as e:
+        console.print(f"[red]Training failed: {e}[/red]")
+
+
+# =============================================================================
+# MIND Training Commands
+# =============================================================================
+
+@main.group()
+def mind():
+    """Train on the MIND news recommendation dataset."""
+    pass
+
+
+@mind.command("download")
+@click.option("--size", default="small", type=click.Choice(["small", "large"]), help="Dataset size")
+def mind_download(size):
+    """Download the MIND dataset for training."""
+    try:
+        from .mind_trainer import MINDTrainer, MINDConfig
+    except ImportError as e:
+        console.print(f"[red]Failed to import MIND trainer: {e}[/red]")
+        console.print("[dim]Make sure PyTorch is installed: pip install torch[/dim]")
+        return
+
+    config = MINDConfig(dataset_size=size)
+    trainer = MINDTrainer(config)
+
+    console.print(f"[cyan]Downloading MIND {size} dataset...[/cyan]")
+    console.print(f"[dim]This may take a while (small: ~50MB, large: ~500MB)[/dim]\n")
+
+    try:
+        trainer.dataset.download("train")
+        trainer.dataset.download("dev")
+        console.print("\n[green]Download complete![/green]")
+        console.print(f"[dim]Data saved to: {config.data_dir}[/dim]")
+    except Exception as e:
+        console.print(f"\n[red]Download failed: {e}[/red]")
+
+
+@mind.command("train")
+@click.option("--size", default="small", type=click.Choice(["small", "large"]), help="Dataset size")
+@click.option("--epochs", default=5, help="Number of training epochs")
+@click.option("--batch-size", default=64, help="Batch size")
+@click.option("--lr", default=0.0001, help="Learning rate")
+def mind_train(size, epochs, batch_size, lr):
+    """Train the NRMS model on MIND dataset."""
+    try:
+        from .mind_trainer import MINDTrainer, MINDConfig
+    except ImportError as e:
+        console.print(f"[red]Failed to import MIND trainer: {e}[/red]")
+        console.print("[dim]Make sure PyTorch is installed: pip install torch[/dim]")
+        return
+
+    config = MINDConfig(
+        dataset_size=size,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=lr,
+    )
+    trainer = MINDTrainer(config)
+
+    console.print(f"[cyan]Setting up MIND {size} training...[/cyan]\n")
+
+    try:
+        # Setup (download if needed, build vocab)
+        trainer.setup(download=True)
+
+        console.print("\n[cyan]Starting training...[/cyan]")
+        console.print(f"[dim]Epochs: {epochs}, Batch size: {batch_size}, LR: {lr}[/dim]\n")
+
+        results = trainer.train(verbose=True)
+
+        # Save model
+        model_path = trainer.save_model()
+
+        console.print(f"\n[green]Training complete![/green]")
+        console.print(f"  Best AUC: {results['best_auc']:.4f}")
+        console.print(f"  Vocab size: {results['vocab_size']}")
+        console.print(f"  Model saved to: {model_path}")
+
+    except Exception as e:
+        console.print(f"\n[red]Training failed: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+
+@mind.command("info")
+@click.option("--size", default="small", type=click.Choice(["small", "large"]), help="Dataset size")
+def mind_info(size):
+    """Show MIND training status and info."""
+    from pathlib import Path
+
+    data_dir = Path.home() / ".news_tracker" / "mind"
+    model_path = data_dir / "nrms_model.pt"
+    vocab_path = data_dir / "vocab.json"
+
+    train_path = data_dir / f"{size}_train"
+    dev_path = data_dir / f"{size}_dev"
+
+    panel_content = f"""[bold]MIND Dataset Status[/bold]
+  Size: {size}
+  Data directory: {data_dir}
+
+[bold]Dataset Files[/bold]
+  Training data: {'[green]Downloaded[/green]' if train_path.exists() else '[yellow]Not downloaded[/yellow]'}
+  Validation data: {'[green]Downloaded[/green]' if dev_path.exists() else '[yellow]Not downloaded[/yellow]'}
+
+[bold]Model[/bold]
+  Vocabulary: {'[green]Built[/green]' if vocab_path.exists() else '[dim]Not built[/dim]'}
+  NRMS model: {'[green]Trained[/green]' if model_path.exists() else '[dim]Not trained[/dim]'}"""
+
+    console.print(Panel(panel_content, title="MIND Training Info"))
+
+    if not train_path.exists():
+        console.print("\n[dim]Run 'news-tracker mind download' to get started[/dim]")
+    elif not model_path.exists():
+        console.print("\n[dim]Run 'news-tracker mind train' to train the model[/dim]")
+
+
 if __name__ == "__main__":
     main()
