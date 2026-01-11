@@ -11,8 +11,10 @@ from .embeddings import EmbeddingEngine
 from .preferences import PreferenceLearner
 from .recommender import NewsRecommender
 from .sources import DEFAULT_FEEDS, FEED_CATEGORIES, ALL_FEEDS
+from .logging_config import setup_logging, get_logger
 
 console = Console()
+logger = get_logger(__name__)
 
 
 def get_recommender(db_path: str = "news_tracker.db") -> tuple[NewsRecommender, any]:
@@ -27,11 +29,18 @@ def get_recommender(db_path: str = "news_tracker.db") -> tuple[NewsRecommender, 
 
 @click.group()
 @click.option("--db", default="news_tracker.db", help="Path to database file")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
+@click.option("--log-file", help="Write logs to file")
 @click.pass_context
-def main(ctx, db):
+def main(ctx, db, verbose, log_file):
     """AI News Tracker - Personalized news that learns your preferences."""
     ctx.ensure_object(dict)
     ctx.obj["db_path"] = db
+
+    # Setup logging
+    log_level = "DEBUG" if verbose else "INFO"
+    setup_logging(level=log_level, log_file=log_file)
+    logger.debug(f"Using database: {db}")
 
 
 @main.command()

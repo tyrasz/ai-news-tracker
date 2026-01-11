@@ -20,8 +20,9 @@ from .models import init_db_scoped, checkpoint_wal, Article
 from .embeddings import EmbeddingEngine
 from .preferences import PreferenceLearner
 from .recommender import NewsRecommender
+from .logging_config import setup_logging, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Global instances (initialized on startup)
 recommender = None
@@ -389,8 +390,21 @@ def _clean_summary(summary: Optional[str]) -> Optional[str]:
     )
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8000, db_path: str = "news_tracker.db"):
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    db_path: str = "news_tracker.db",
+    log_level: str = "INFO",
+):
     """Run the web server."""
     import uvicorn
+
+    # Setup application logging
+    setup_logging(level=log_level)
+
     os.environ["NEWS_DB_PATH"] = db_path
-    uvicorn.run(app, host=host, port=port)
+    print(f"Starting web server at http://{host}:{port}")
+    print(f"Using database: {db_path}")
+    print("Press Ctrl+C to stop")
+
+    uvicorn.run(app, host=host, port=port, log_level=log_level.lower())
