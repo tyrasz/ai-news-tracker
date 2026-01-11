@@ -11,6 +11,13 @@ from .models import Article, FeedSource
 from .embeddings import EmbeddingEngine, embedding_to_bytes, bytes_to_embedding
 from .preferences import PreferenceLearner
 from .sources import FeedFetcher, RawArticle
+from .algorithms import (
+    AlgorithmType,
+    AlgorithmConfig,
+    get_algorithm,
+    list_algorithms,
+    ScoredArticle,
+)
 
 
 class NewsRecommender:
@@ -318,3 +325,66 @@ class NewsRecommender:
             "active_sources": sources,
             "has_preferences": preference is not None,
         }
+
+    def get_recommendations_v2(
+        self,
+        algorithm: str = "for_you",
+        limit: int = 20,
+        profile_name: str = "default",
+        include_read: bool = False,
+        max_age_days: int = 7,
+        freshness_weight: float = 0.3,
+        freshness_half_life_hours: float = 24.0,
+    ) -> list[tuple[Article, float, float]]:
+        """
+        Get recommendations using a specific algorithm.
+
+        Args:
+            algorithm: Algorithm to use (for_you, explore, deep_dive, trending, balanced, contrarian)
+            limit: Maximum number of articles to return
+            profile_name: User profile to use for personalization
+            include_read: If True, include articles already marked as read
+            max_age_days: Only consider articles from the last N days
+            freshness_weight: 0-1, how much freshness matters vs relevance
+            freshness_half_life_hours: Hours until freshness drops to 50%
+
+        Returns:
+            List of (article, combined_score, freshness) tuples, sorted by score
+        """
+        # Parse algorithm type
+        try:
+            algo_type = AlgorithmType(algorithm)
+        except ValueError:
+            algo_type = AlgorithmType.FOR_YOU
+
+        # Create algorithm config
+        config = AlgorithmConfig(
+            freshness_weight=freshness_weight,
+            freshness_half_life_hours=freshness_half_life_hours,
+            max_age_days=max_age_days,
+            include_read=include_read,
+        )
+
+        # Get the algorithm
+        algo = get_algorithm(algo_type, self.db, self.embedding_engine, config)
+
+        # Get candidates
+        candidates = algo.get_candidates()
+        if not candidates:
+            return []
+
+        # Get preference embedding
+        preference = self.preference_learner.get_preference_embedding(self.db, profile_name)
+
+        # Score articles using the selected algorithm
+        scored_articles = algo.score_articles(candidates, preference)
+
+        # Convert to legacy format and limit
+        return [
+            (sa.article, sa.final_score, sa.freshness_score)
+            for sa in scored_articles[:limit]
+        ]
+
+    def list_algorithms(self) -> list[dict]:
+        """List all available recommendation algorithms."""
+        return list_algorithms()

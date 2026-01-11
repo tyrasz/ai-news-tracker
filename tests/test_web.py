@@ -172,7 +172,7 @@ class TestRecommendationsEndpoint:
     def test_get_recommendations_with_params(self, test_app):
         """Test recommendations with query parameters."""
         client, mock_recommender, _ = test_app
-        mock_recommender.get_recommendations.return_value = []
+        mock_recommender.get_recommendations_v2.return_value = []
 
         response = client.get(
             "/api/recommendations",
@@ -180,11 +180,13 @@ class TestRecommendationsEndpoint:
                 "limit": 10,
                 "freshness_weight": 0.5,
                 "include_read": True,
+                "algorithm": "trending",
             }
         )
 
         assert response.status_code == 200
-        mock_recommender.get_recommendations.assert_called_once_with(
+        mock_recommender.get_recommendations_v2.assert_called_once_with(
+            algorithm="trending",
             limit=10,
             include_read=True,
             freshness_weight=0.5,
@@ -201,6 +203,26 @@ class TestRecommendationsEndpoint:
         # Too high
         response = client.get("/api/recommendations", params={"limit": 200})
         assert response.status_code == 422
+
+
+class TestAlgorithmsEndpoint:
+    """Tests for the algorithms endpoint."""
+
+    def test_list_algorithms(self, test_app):
+        """Test listing available algorithms."""
+        client, mock_recommender, _ = test_app
+        mock_recommender.list_algorithms.return_value = [
+            {"id": "for_you", "name": "For You", "description": "Personalized"},
+            {"id": "explore", "name": "Explore", "description": "Discover new topics"},
+        ]
+
+        response = client.get("/api/algorithms")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["id"] == "for_you"
 
 
 class TestTopicSearchEndpoint:

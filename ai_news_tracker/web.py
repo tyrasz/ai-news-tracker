@@ -77,9 +77,11 @@ def get_recommendations(
     limit: int = Query(20, ge=1, le=100),
     freshness_weight: float = Query(0.3, ge=0, le=1),
     include_read: bool = Query(False),
+    algorithm: str = Query("for_you", description="Algorithm: for_you, explore, deep_dive, trending, balanced, contrarian"),
 ):
-    """Get personalized article recommendations."""
-    results = recommender.get_recommendations(
+    """Get personalized article recommendations using the specified algorithm."""
+    results = recommender.get_recommendations_v2(
+        algorithm=algorithm,
         limit=limit,
         include_read=include_read,
         freshness_weight=freshness_weight,
@@ -101,6 +103,12 @@ def get_recommendations(
         )
         for article, score, freshness in results
     ]
+
+
+@app.get("/api/algorithms")
+def get_algorithms():
+    """List available recommendation algorithms."""
+    return recommender.list_algorithms()
 
 
 @app.get("/api/topic/{query}", response_model=List[ArticleResponse])

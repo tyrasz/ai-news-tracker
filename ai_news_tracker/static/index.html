@@ -324,6 +324,47 @@
             border: 1px solid #4ade80;
         }
 
+        .algorithm-tabs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 10px 0;
+        }
+
+        .algo-tab {
+            padding: 8px 16px;
+            border: 1px solid #333;
+            border-radius: 20px;
+            background: transparent;
+            color: #888;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .algo-tab:hover {
+            border-color: #555;
+            color: #ccc;
+        }
+
+        .algo-tab.active {
+            background: #4a9eff;
+            border-color: #4a9eff;
+            color: #fff;
+        }
+
+        .algo-tab .algo-icon {
+            margin-right: 6px;
+        }
+
+        .algo-description {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 5px;
+            min-height: 20px;
+        }
+
         @media (max-width: 600px) {
             .header-top {
                 flex-direction: column;
@@ -358,9 +399,29 @@
             <div class="search-bar">
                 <input type="text" id="search-input" placeholder="Search topics... (e.g., 'artificial intelligence', 'climate change')">
                 <button class="btn btn-primary" onclick="searchTopic()">Search</button>
-                <button class="btn btn-secondary" onclick="loadRecommendations()">For You</button>
                 <button class="btn btn-secondary" onclick="refreshFeeds()" id="refresh-btn" title="Fetch new articles from all sources">Refresh</button>
             </div>
+            <div class="algorithm-tabs" id="algorithm-tabs">
+                <button class="algo-tab active" data-algo="for_you" onclick="selectAlgorithm('for_you')">
+                    <span class="algo-icon">&#10084;</span>For You
+                </button>
+                <button class="algo-tab" data-algo="explore" onclick="selectAlgorithm('explore')">
+                    <span class="algo-icon">&#127758;</span>Explore
+                </button>
+                <button class="algo-tab" data-algo="deep_dive" onclick="selectAlgorithm('deep_dive')">
+                    <span class="algo-icon">&#128218;</span>Deep Dive
+                </button>
+                <button class="algo-tab" data-algo="trending" onclick="selectAlgorithm('trending')">
+                    <span class="algo-icon">&#128293;</span>Trending
+                </button>
+                <button class="algo-tab" data-algo="balanced" onclick="selectAlgorithm('balanced')">
+                    <span class="algo-icon">&#9878;</span>Balanced
+                </button>
+                <button class="algo-tab" data-algo="contrarian" onclick="selectAlgorithm('contrarian')">
+                    <span class="algo-icon">&#128260;</span>Contrarian
+                </button>
+            </div>
+            <div class="algo-description" id="algo-description">Personalized recommendations based on your reading history</div>
             <div class="controls">
                 <label>
                     Freshness:
@@ -389,6 +450,25 @@
     <script>
         let currentMode = 'recommendations';
         let currentQuery = '';
+        let currentAlgorithm = 'for_you';
+
+        const algorithmDescriptions = {
+            'for_you': 'Personalized recommendations based on your reading history',
+            'explore': 'Discover new topics outside your usual interests',
+            'deep_dive': 'Multiple articles on fewer topics for deeper understanding',
+            'trending': 'Latest and freshest news, regardless of your preferences',
+            'balanced': 'A balanced mix of personalized, fresh, and diverse content',
+            'contrarian': 'Challenge your views with different perspectives'
+        };
+
+        const algorithmTitles = {
+            'for_you': 'For You',
+            'explore': 'Explore',
+            'deep_dive': 'Deep Dive',
+            'trending': 'Trending',
+            'balanced': 'Balanced',
+            'contrarian': 'Contrarian'
+        };
 
         console.log('AI News Tracker initializing...');
 
@@ -403,6 +483,25 @@
         document.getElementById('search-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') searchTopic();
         });
+
+        function selectAlgorithm(algo) {
+            currentAlgorithm = algo;
+            currentMode = 'recommendations';
+
+            // Update active tab
+            document.querySelectorAll('.algo-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.algo === algo);
+            });
+
+            // Update description
+            document.getElementById('algo-description').textContent = algorithmDescriptions[algo] || '';
+
+            // Clear search
+            document.getElementById('search-input').value = '';
+
+            // Load with new algorithm
+            loadRecommendations();
+        }
 
         function updateFreshness() {
             const value = document.getElementById('freshness').value;
@@ -426,12 +525,13 @@
             showLoading();
 
             try {
-                console.log('Fetching from /api/recommendations...');
-                const response = await fetch(`/api/recommendations?limit=30&freshness_weight=${freshness}&include_read=${includeRead}`);
+                console.log(`Fetching from /api/recommendations with algorithm=${currentAlgorithm}...`);
+                const response = await fetch(`/api/recommendations?limit=30&freshness_weight=${freshness}&include_read=${includeRead}&algorithm=${currentAlgorithm}`);
                 console.log('Response status:', response.status);
                 const articles = await response.json();
                 console.log('Got articles:', articles.length);
-                renderArticles(articles, 'Recommended for You');
+                const title = algorithmTitles[currentAlgorithm] || 'Recommendations';
+                renderArticles(articles, title);
             } catch (error) {
                 console.error('Error loading recommendations:', error);
                 showError('Failed to load recommendations: ' + error.message);
