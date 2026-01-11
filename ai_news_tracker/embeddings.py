@@ -2,14 +2,72 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
+from collections import OrderedDict
+from threading import Lock
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger(__name__)
+
+
+class LRUCache:
+    """Thread-safe LRU cache for embeddings."""
+
+    def __init__(self, maxsize: int = 1000):
+        self.maxsize = maxsize
+        self.cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self.lock = Lock()
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key: str) -> np.ndarray | None:
+        """Get item from cache, returning None if not found."""
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                self.hits += 1
+                return self.cache[key]
+            self.misses += 1
+            return None
+
+    def put(self, key: str, value: np.ndarray) -> None:
+        """Add item to cache, evicting oldest if full."""
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+            else:
+                if len(self.cache) >= self.maxsize:
+                    self.cache.popitem(last=False)
+                self.cache[key] = value
+
+    def clear(self) -> None:
+        """Clear the cache."""
+        with self.lock:
+            self.cache.clear()
+            self.hits = 0
+            self.misses = 0
+
+    def stats(self) -> dict:
+        """Get cache statistics."""
+        with self.lock:
+            total = self.hits + self.misses
+            hit_rate = self.hits / total if total > 0 else 0.0
+            return {
+                "size": len(self.cache),
+                "maxsize": self.maxsize,
+                "hits": self.hits,
+                "misses": self.misses,
+                "hit_rate": hit_rate,
+            }
 
 
 class EmbeddingEngine:
     """Generates embeddings for articles using sentence-transformers."""
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", cache_size: int = 1000):
         """
         Initialize the embedding engine.
 
@@ -17,15 +75,34 @@ class EmbeddingEngine:
             model_name: Name of the sentence-transformers model to use.
                        "all-MiniLM-L6-v2" is fast and good for semantic search.
                        "all-mpnet-base-v2" is more accurate but slower.
+            cache_size: Maximum number of embeddings to cache in memory.
         """
         self.model = SentenceTransformer(model_name)
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
+        self._cache = LRUCache(maxsize=cache_size)
 
-    def embed_text(self, text: str) -> np.ndarray:
+    def _hash_text(self, text: str) -> str:
+        """Generate hash key for text."""
+        return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+    def embed_text(self, text: str, use_cache: bool = True) -> np.ndarray:
         """Generate embedding for a single text."""
-        return self.model.encode(text, convert_to_numpy=True)
+        if use_cache:
+            key = self._hash_text(text)
+            cached = self._cache.get(key)
+            if cached is not None:
+                return cached
 
-    def embed_article(self, title: str, content: str | None = None, summary: str | None = None) -> np.ndarray:
+        embedding = self.model.encode(text, convert_to_numpy=True)
+
+        if use_cache:
+            self._cache.put(key, embedding)
+
+        return embedding
+
+    def embed_article(
+        self, title: str, content: str | None = None, summary: str | None = None, use_cache: bool = True
+    ) -> np.ndarray:
         """
         Generate embedding for an article.
 
@@ -41,7 +118,7 @@ class EmbeddingEngine:
             parts.append(summary)
 
         combined = " ".join(parts)
-        return self.embed_text(combined)
+        return self.embed_text(combined, use_cache=use_cache)
 
     def embed_batch(self, texts: list[str]) -> np.ndarray:
         """Generate embeddings for multiple texts efficiently."""
@@ -70,6 +147,15 @@ class EmbeddingEngine:
 
         # Return indices sorted by descending similarity
         return np.argsort(similarities)[::-1]
+
+    def cache_stats(self) -> dict:
+        """Get cache statistics."""
+        return self._cache.stats()
+
+    def clear_cache(self) -> None:
+        """Clear the embedding cache."""
+        self._cache.clear()
+        logger.debug("Embedding cache cleared")
 
 
 def embedding_to_bytes(embedding: np.ndarray) -> bytes:

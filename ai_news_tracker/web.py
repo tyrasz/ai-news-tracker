@@ -304,6 +304,19 @@ def refresh_feeds():
         return {"status": "error", "message": str(e)}
 
 
+@app.get("/api/cache/stats")
+def get_cache_stats():
+    """Get embedding cache statistics."""
+    return recommender.embedding_engine.cache_stats()
+
+
+@app.post("/api/cache/clear")
+def clear_cache():
+    """Clear the embedding cache."""
+    recommender.embedding_engine.clear_cache()
+    return {"status": "ok", "message": "Cache cleared"}
+
+
 def _clean_summary(summary: Optional[str]) -> Optional[str]:
     """Clean up HTML entities in summary."""
     if not summary:

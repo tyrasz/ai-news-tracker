@@ -9,6 +9,7 @@ import pytest
 
 from ai_news_tracker.embeddings import (
     EmbeddingEngine,
+    LRUCache,
     embedding_to_bytes,
     bytes_to_embedding,
 )
@@ -225,3 +226,167 @@ class TestEmbeddingEngine:
 
         assert len(ranking) == 10
         assert set(ranking) == set(range(10))  # All indices present
+
+
+class TestLRUCache:
+    """Tests for the LRU cache implementation."""
+
+    def test_cache_basic_operations(self):
+        """Test basic get/put operations."""
+        cache = LRUCache(maxsize=3)
+
+        # Initially empty
+        assert cache.get("key1") is None
+
+        # Add and retrieve
+        arr = np.array([1.0, 2.0, 3.0])
+        cache.put("key1", arr)
+        result = cache.get("key1")
+        np.testing.assert_array_equal(result, arr)
+
+    def test_cache_eviction(self):
+        """Test that oldest items are evicted when full."""
+        cache = LRUCache(maxsize=2)
+
+        cache.put("key1", np.array([1.0]))
+        cache.put("key2", np.array([2.0]))
+        cache.put("key3", np.array([3.0]))  # This should evict key1
+
+        assert cache.get("key1") is None  # Evicted
+        assert cache.get("key2") is not None
+        assert cache.get("key3") is not None
+
+    def test_cache_lru_order(self):
+        """Test that accessing items updates their position."""
+        cache = LRUCache(maxsize=2)
+
+        cache.put("key1", np.array([1.0]))
+        cache.put("key2", np.array([2.0]))
+
+        # Access key1 to make it recently used
+        cache.get("key1")
+
+        # Add key3, should evict key2 (least recently used)
+        cache.put("key3", np.array([3.0]))
+
+        assert cache.get("key1") is not None  # Still there
+        assert cache.get("key2") is None  # Evicted
+        assert cache.get("key3") is not None
+
+    def test_cache_stats(self):
+        """Test cache statistics tracking."""
+        cache = LRUCache(maxsize=5)
+
+        cache.put("key1", np.array([1.0]))
+        cache.get("key1")  # Hit
+        cache.get("key1")  # Hit
+        cache.get("key2")  # Miss
+
+        stats = cache.stats()
+        assert stats["size"] == 1
+        assert stats["maxsize"] == 5
+        assert stats["hits"] == 2
+        assert stats["misses"] == 1
+        assert stats["hit_rate"] == 2 / 3
+
+    def test_cache_clear(self):
+        """Test clearing the cache."""
+        cache = LRUCache(maxsize=5)
+
+        cache.put("key1", np.array([1.0]))
+        cache.put("key2", np.array([2.0]))
+        cache.get("key1")
+
+        cache.clear()
+
+        # Stats should be reset
+        stats = cache.stats()
+        assert stats["size"] == 0
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
+
+        # Keys should no longer exist (these calls add to misses)
+        assert cache.get("key1") is None
+        assert cache.get("key2") is None
+
+
+class TestEmbeddingCaching:
+    """Tests for embedding caching functionality."""
+
+    @pytest.fixture
+    def mock_sentence_transformer(self):
+        """Create a mock SentenceTransformer that tracks calls."""
+        with patch("ai_news_tracker.embeddings.SentenceTransformer") as mock_class:
+            mock_model = MagicMock()
+            mock_model.get_sentence_embedding_dimension.return_value = 384
+            mock_model.call_count = 0
+
+            def encode(text, convert_to_numpy=True, show_progress_bar=False):
+                mock_model.call_count += 1
+                np.random.seed(hash(text) % (2**32))
+                return np.random.randn(384).astype(np.float32)
+
+            mock_model.encode = encode
+            mock_class.return_value = mock_model
+            yield mock_model
+
+    def test_caching_reduces_model_calls(self, mock_sentence_transformer):
+        """Test that caching reduces actual model calls."""
+        engine = EmbeddingEngine()
+
+        # First call - should hit the model
+        engine.embed_text("Hello world")
+        assert mock_sentence_transformer.call_count == 1
+
+        # Second call with same text - should use cache
+        engine.embed_text("Hello world")
+        assert mock_sentence_transformer.call_count == 1  # No new call
+
+        # Different text - should hit the model
+        engine.embed_text("Different text")
+        assert mock_sentence_transformer.call_count == 2
+
+    def test_cache_can_be_disabled(self, mock_sentence_transformer):
+        """Test that caching can be disabled."""
+        engine = EmbeddingEngine()
+
+        engine.embed_text("Hello world", use_cache=False)
+        engine.embed_text("Hello world", use_cache=False)
+
+        # Both calls should hit the model
+        assert mock_sentence_transformer.call_count == 2
+
+    def test_cache_stats_accessible(self, mock_sentence_transformer):
+        """Test that cache stats are accessible."""
+        engine = EmbeddingEngine()
+
+        engine.embed_text("Text 1")
+        engine.embed_text("Text 1")  # Cache hit
+        engine.embed_text("Text 2")
+
+        stats = engine.cache_stats()
+        assert stats["hits"] == 1
+        assert stats["misses"] == 2
+        assert stats["size"] == 2
+
+    def test_cache_clear(self, mock_sentence_transformer):
+        """Test clearing the cache."""
+        engine = EmbeddingEngine()
+
+        engine.embed_text("Text 1")
+        engine.clear_cache()
+
+        stats = engine.cache_stats()
+        assert stats["size"] == 0
+
+    def test_cache_size_configurable(self, mock_sentence_transformer):
+        """Test that cache size is configurable."""
+        engine = EmbeddingEngine(cache_size=2)
+
+        engine.embed_text("Text 1")
+        engine.embed_text("Text 2")
+        engine.embed_text("Text 3")  # Should evict Text 1
+
+        stats = engine.cache_stats()
+        assert stats["size"] == 2
+        assert stats["maxsize"] == 2
