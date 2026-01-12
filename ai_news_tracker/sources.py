@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Iterator
-import feedparser
+import feedparser  # type: ignore[import-untyped]
 import httpx
 import trafilatura
 from dataclasses import dataclass

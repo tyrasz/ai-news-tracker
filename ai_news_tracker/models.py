@@ -5,13 +5,19 @@ from datetime import datetime
 from functools import wraps
 import logging
 import time
+from typing import Optional
 
-from sqlalchemy import create_engine, event, text, Column, Integer, String, Text, Float, DateTime, Boolean, LargeBinary
-from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
+from sqlalchemy import create_engine, event, text, String, Text, Float, DateTime, LargeBinary
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Base class for SQLAlchemy models."""
+    pass
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,23 +40,23 @@ class Article(Base):
 
     __tablename__ = "articles"
 
-    id = Column(Integer, primary_key=True)
-    url = Column(String(2048), unique=True, nullable=False)
-    title = Column(String(512), nullable=False)
-    content = Column(Text)
-    summary = Column(Text)
-    source = Column(String(256))  # e.g., "Hacker News", "TechCrunch"
-    author = Column(String(256))
-    published_at = Column(DateTime)
-    fetched_at = Column(DateTime, default=datetime.utcnow)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    url: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    content: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    summary: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    source: Mapped[Optional[str]] = mapped_column(String(256), default=None)  # e.g., "Hacker News", "TechCrunch"
+    author: Mapped[Optional[str]] = mapped_column(String(256), default=None)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
+    fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Embedding stored as binary (numpy array bytes)
-    embedding = Column(LargeBinary)
+    embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, default=None)
 
     # User interaction
-    is_read = Column(Boolean, default=False)
-    is_liked = Column(Boolean, default=None)  # None = no feedback, True = liked, False = disliked
-    read_at = Column(DateTime)
+    is_read: Mapped[bool] = mapped_column(default=False)
+    is_liked: Mapped[Optional[bool]] = mapped_column(default=None)  # None = no feedback, True = liked, False = disliked
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
 
     def __repr__(self):
         return f"<Article {self.id}: {self.title[:50]}>"
@@ -61,21 +67,21 @@ class UserProfile(Base):
 
     __tablename__ = "user_profile"
 
-    id = Column(Integer, primary_key=True)
-    name = Column(String(256), default="default")
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), default="default")
 
     # Preference embedding (weighted average of liked articles)
-    preference_embedding = Column(LargeBinary)
+    preference_embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, default=None)
 
     # Stats
-    articles_liked = Column(Integer, default=0)
-    articles_disliked = Column(Integer, default=0)
+    articles_liked: Mapped[int] = mapped_column(default=0)
+    articles_disliked: Mapped[int] = mapped_column(default=0)
 
     # Settings
-    decay_factor = Column(Float, default=0.95)
+    decay_factor: Mapped[float] = mapped_column(Float, default=0.95)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class FeedSource(Base):
@@ -83,13 +89,13 @@ class FeedSource(Base):
 
     __tablename__ = "feed_sources"
 
-    id = Column(Integer, primary_key=True)
-    name = Column(String(256), nullable=False)
-    url = Column(String(2048), unique=True, nullable=False)
-    feed_type = Column(String(50), default="rss")  # rss, atom, json
-    is_active = Column(Boolean, default=True)
-    last_fetched = Column(DateTime)
-    fetch_interval_minutes = Column(Integer, default=60)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
+    feed_type: Mapped[str] = mapped_column(String(50), default="rss")  # rss, atom, json
+    is_active: Mapped[bool] = mapped_column(default=True)
+    last_fetched: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
+    fetch_interval_minutes: Mapped[int] = mapped_column(default=60)
 
     def __repr__(self):
         return f"<FeedSource {self.name}>"

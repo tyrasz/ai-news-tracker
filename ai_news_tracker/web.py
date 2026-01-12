@@ -186,6 +186,7 @@ def get_recommendations(
     algorithm: AlgorithmType = Query(AlgorithmType.FOR_YOU, description="Recommendation algorithm to use"),
 ):
     """Get personalized article recommendations using the specified algorithm."""
+    assert recommender is not None, "Recommender not initialized"
     results = recommender.get_recommendations_v2(
         algorithm=algorithm.value,
         limit=limit,
@@ -214,6 +215,7 @@ def get_recommendations(
 @app.get("/api/algorithms")
 def get_algorithms():
     """List available recommendation algorithms."""
+    assert recommender is not None, "Recommender not initialized"
     return recommender.list_algorithms()
 
 
@@ -226,6 +228,7 @@ def get_recommendations_grouped(
     similarity_threshold: float = Query(0.75, ge=0.5, le=0.95, description="Similarity threshold for grouping (0.75 = quite similar)"),
 ):
     """Get recommendations with similar articles grouped together."""
+    assert recommender is not None, "Recommender not initialized"
     groups = recommender.get_recommendations_grouped(
         algorithm=algorithm.value,
         limit=limit,
@@ -272,6 +275,7 @@ def search_topic(
     min_relevance: float = Query(0.25, ge=0, le=1, description="Minimum similarity threshold to filter irrelevant results"),
 ):
     """Search for articles about a specific topic."""
+    assert recommender is not None, "Recommender not initialized"
     # Strip and validate query
     query = query.strip()
     if not query:
@@ -306,6 +310,7 @@ def search_topic(
 @app.post("/api/feedback")
 def record_feedback(feedback: FeedbackRequest):
     """Record like/dislike feedback for an article."""
+    assert recommender is not None, "Recommender not initialized"
     recommender.record_feedback(feedback.article_id, feedback.liked)
     return {"status": "ok", "article_id": feedback.article_id, "liked": feedback.liked}
 
@@ -313,6 +318,7 @@ def record_feedback(feedback: FeedbackRequest):
 @app.post("/api/read/{article_id}")
 def mark_read(article_id: int = PathParam(..., ge=1, description="Article ID")):
     """Mark an article as read."""
+    assert recommender is not None, "Recommender not initialized"
     recommender.mark_read(article_id)
     return {"status": "ok", "article_id": article_id}
 
@@ -320,6 +326,7 @@ def mark_read(article_id: int = PathParam(..., ge=1, description="Article ID")):
 @app.get("/api/article/{article_id}")
 def get_article(article_id: int = PathParam(..., ge=1, description="Article ID")):
     """Get full article details."""
+    assert db_session is not None, "Database session not initialized"
     article = db_session.query(Article).get(article_id)
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
@@ -341,6 +348,7 @@ def get_article(article_id: int = PathParam(..., ge=1, description="Article ID")
 @app.get("/api/stats", response_model=StatsResponse)
 def get_stats():
     """Get statistics about articles and preferences."""
+    assert recommender is not None, "Recommender not initialized"
     stats = recommender.get_stats()
     return StatsResponse(**stats)
 
@@ -348,6 +356,7 @@ def get_stats():
 @app.post("/api/refresh")
 def refresh_feeds():
     """Fetch new articles from all feed sources."""
+    assert recommender is not None, "Recommender not initialized"
     try:
         new_count = recommender.refresh_all_feeds(fetch_content=False)
         return {"status": "ok", "new_articles": new_count}
@@ -358,12 +367,14 @@ def refresh_feeds():
 @app.get("/api/cache/stats")
 def get_cache_stats():
     """Get embedding cache statistics."""
+    assert recommender is not None, "Recommender not initialized"
     return recommender.embedding_engine.cache_stats()
 
 
 @app.post("/api/cache/clear")
 def clear_cache():
     """Clear the embedding cache."""
+    assert recommender is not None, "Recommender not initialized"
     recommender.embedding_engine.clear_cache()
     return {"status": "ok", "message": "Cache cleared"}
 

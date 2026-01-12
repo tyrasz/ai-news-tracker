@@ -6,11 +6,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
 
 import numpy as np
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, ColumnElement
 
 from .models import Article, UserProfile
 from .embeddings import EmbeddingEngine, bytes_to_embedding
@@ -91,10 +91,10 @@ class RecommendationAlgorithm(ABC):
 
     def get_candidates(self) -> List[Article]:
         """Get candidate articles from database."""
-        filters = [Article.embedding.isnot(None)]
+        filters: List[ColumnElement[bool]] = [Article.embedding.isnot(None)]
 
         if not self.config.include_read:
-            filters.append(Article.is_read == False)
+            filters.append(Article.is_read == False)  # noqa: E712
 
         if self.config.max_age_days:
             cutoff = datetime.utcnow() - timedelta(days=self.config.max_age_days)
@@ -127,6 +127,7 @@ class ForYouAlgorithm(RecommendationAlgorithm):
         scored = []
 
         for article in candidates:
+            assert article.embedding is not None  # Filtered by get_candidates
             embedding = bytes_to_embedding(article.embedding, self.embedding_engine.embedding_dim)
             freshness = self.compute_freshness(article)
 
@@ -179,6 +180,7 @@ class ExploreAlgorithm(RecommendationAlgorithm):
         scored = []
 
         for article in candidates:
+            assert article.embedding is not None  # Filtered by get_candidates
             embedding = bytes_to_embedding(article.embedding, self.embedding_engine.embedding_dim)
             freshness = self.compute_freshness(article)
 
@@ -230,14 +232,15 @@ class DeepDiveAlgorithm(RecommendationAlgorithm):
         if not candidates:
             return []
 
-        # Get all embeddings
+        # Get all embeddings (candidates are filtered to have embeddings)
         embeddings = np.array([
-            bytes_to_embedding(a.embedding, self.embedding_engine.embedding_dim)
+            bytes_to_embedding(a.embedding, self.embedding_engine.embedding_dim)  # type: ignore[arg-type]
             for a in candidates
         ])
 
         # Simple clustering: find topic centroids from top articles
         # First, score by preference to find seed articles
+        top_indices: np.ndarray
         if preference_embedding is not None:
             similarities = embeddings @ preference_embedding
             top_indices = np.argsort(similarities)[-5:]  # Top 5 as cluster seeds
@@ -248,7 +251,7 @@ class DeepDiveAlgorithm(RecommendationAlgorithm):
                 key=lambda x: x[1].published_at or x[1].fetched_at or datetime.min,
                 reverse=True
             )
-            top_indices = [i for i, _ in sorted_by_date[:5]]
+            top_indices = np.array([i for i, _ in sorted_by_date[:5]])
 
         # Compute cluster centroids
         cluster_centroids = embeddings[top_indices]
@@ -308,6 +311,7 @@ class TrendingAlgorithm(RecommendationAlgorithm):
 
             # Minimal preference influence
             if preference_embedding is not None:
+                assert article.embedding is not None  # Filtered by get_candidates
                 embedding = bytes_to_embedding(article.embedding, self.embedding_engine.embedding_dim)
                 similarity = self.embedding_engine.cosine_similarity(preference_embedding, embedding)
                 relevance = (similarity + 1) / 2
@@ -352,9 +356,9 @@ class BalancedAlgorithm(RecommendationAlgorithm):
         if not candidates:
             return []
 
-        # Get all embeddings for diversity calculation
+        # Get all embeddings for diversity calculation (candidates filtered to have embeddings)
         embeddings = np.array([
-            bytes_to_embedding(a.embedding, self.embedding_engine.embedding_dim)
+            bytes_to_embedding(a.embedding, self.embedding_engine.embedding_dim)  # type: ignore[arg-type]
             for a in candidates
         ])
 
@@ -417,6 +421,7 @@ class ContrarianAlgorithm(RecommendationAlgorithm):
         scored = []
 
         for article in candidates:
+            assert article.embedding is not None  # Filtered by get_candidates
             embedding = bytes_to_embedding(article.embedding, self.embedding_engine.embedding_dim)
             freshness = self.compute_freshness(article)
 
@@ -462,16 +467,16 @@ def get_algorithm(
     """Factory function to get an algorithm instance."""
     config = config or AlgorithmConfig()
     algorithm_class = ALGORITHMS.get(algorithm_type, ForYouAlgorithm)
-    return algorithm_class(db, embedding_engine, config)
+    return algorithm_class(db, embedding_engine, config)  # type: ignore[abstract]
 
 
 def list_algorithms() -> List[dict]:
     """List all available algorithms with metadata."""
-    result = []
+    result: List[dict[str, Any]] = []
     for algo_type, algo_class in ALGORITHMS.items():
         # Create a dummy instance to get name/description
         # We use None for db/engine since we only need metadata
-        instance = algo_class.__new__(algo_class)
+        instance = algo_class.__new__(algo_class)  # type: ignore[type-abstract]
         result.append({
             "id": algo_type.value,
             "name": instance.name,

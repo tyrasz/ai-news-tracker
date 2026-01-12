@@ -684,6 +684,7 @@ class MINDTrainer:
 
     def _evaluate(self, loader: DataLoader, device: torch.device) -> float:
         """Evaluate model and return AUC."""
+        assert self.model is not None, "Model must be initialized before evaluation"
         self.model.eval()
         all_labels = []
         all_scores = []

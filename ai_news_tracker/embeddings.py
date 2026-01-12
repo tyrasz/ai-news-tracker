@@ -8,7 +8,7 @@ from collections import OrderedDict
 from threading import Lock
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 

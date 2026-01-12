@@ -1,5 +1,7 @@
 """Command-line interface for the AI News Tracker."""
 
+from typing import Any
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -17,7 +19,7 @@ console = Console()
 logger = get_logger(__name__)
 
 
-def get_recommender(db_path: str = "news_tracker.db") -> tuple[NewsRecommender, any]:
+def get_recommender(db_path: str = "news_tracker.db") -> tuple[NewsRecommender, Any]:
     """Initialize and return the recommender with database session."""
     engine, Session = init_db(db_path)
     session = Session()

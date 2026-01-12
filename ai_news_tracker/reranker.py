@@ -167,7 +167,7 @@ if TORCH_AVAILABLE:
                 return scores.numpy()
 else:
     # Dummy class when PyTorch not available
-    class RerankerModel:
+    class RerankerModel:  # type: ignore[no-redef]
         def __init__(self, config: RerankerConfig):
             raise RuntimeError("PyTorch is required for the re-ranker model")
 

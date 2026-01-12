@@ -200,7 +200,7 @@ class NewsRecommender:
 
         if preference is None:
             # No preferences yet - return by recency with freshness scores
-            candidates.sort(key=lambda a: a.published_at or a.fetched_at, reverse=True)
+            candidates.sort(key=lambda a: a.published_at or a.fetched_at or datetime.min, reverse=True)
             return [
                 (a, 0.5, self.compute_freshness(a, freshness_half_life_hours))
                 for a in candidates[:limit]
@@ -209,6 +209,7 @@ class NewsRecommender:
         # Score all candidates
         scored = []
         for article in candidates:
+            assert article.embedding is not None  # Filtered by query
             embedding = bytes_to_embedding(article.embedding, self.embedding_engine.embedding_dim)
 
             # Relevance score from preference similarity (normalize to 0-1 range)
@@ -317,6 +318,7 @@ class NewsRecommender:
         # Score all candidates by similarity to query
         scored = []
         for article in candidates:
+            assert article.embedding is not None  # Filtered by query
             embedding = bytes_to_embedding(article.embedding, self.embedding_engine.embedding_dim)
 
             # Raw cosine similarity (-1 to 1, but typically 0 to 0.6 for text)
