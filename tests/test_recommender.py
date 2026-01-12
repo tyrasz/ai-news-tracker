@@ -313,16 +313,19 @@ class TestNewsRecommender:
         """Test that min_relevance threshold filters irrelevant articles."""
         session, _ = temp_db
 
+        # Set up mock to return consistent similarity values
+        mock_embedding_engine.cosine_similarity.side_effect = lambda q, e: 0.5
+
         with patch("ai_news_tracker.recommender.FeedFetcher"):
             recommender = NewsRecommender(session, mock_embedding_engine)
 
-            # With min_relevance=0, should return articles
+            # With min_relevance=0, should return articles (similarity 0.5 > 0)
             results_no_filter = recommender.search_by_topic("test query", min_relevance=0)
             assert len(results_no_filter) > 0
 
-            # With very high min_relevance, random embeddings won't pass
-            results_strict = recommender.search_by_topic("test query", min_relevance=0.9)
-            assert len(results_strict) < len(results_no_filter)
+            # With min_relevance=0.6, similarity of 0.5 won't pass
+            results_strict = recommender.search_by_topic("test query", min_relevance=0.6)
+            assert len(results_strict) == 0
 
     def test_get_stats_empty(self, temp_db, mock_embedding_engine):
         """Test stats with empty database."""

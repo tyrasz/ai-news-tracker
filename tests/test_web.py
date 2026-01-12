@@ -543,6 +543,92 @@ class TestRefreshEndpoint:
         assert "Network error" in data["message"]
 
 
+class TestCacheEndpoints:
+    """Tests for cache management endpoints."""
+
+    def test_get_cache_stats(self, test_app):
+        """Test getting cache statistics."""
+        client, mock_recommender, _ = test_app
+
+        mock_engine = MagicMock()
+        mock_engine.cache_stats.return_value = {
+            "size": 100,
+            "maxsize": 1000,
+            "hits": 50,
+            "misses": 25,
+            "hit_rate": 0.67,
+        }
+        mock_recommender.embedding_engine = mock_engine
+
+        response = client.get("/api/cache/stats")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "size" in data
+        mock_engine.cache_stats.assert_called_once()
+
+    def test_clear_cache(self, test_app):
+        """Test clearing the cache."""
+        client, mock_recommender, _ = test_app
+
+        mock_engine = MagicMock()
+        mock_recommender.embedding_engine = mock_engine
+
+        response = client.post("/api/cache/clear")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        mock_engine.clear_cache.assert_called_once()
+
+
+class TestTopicSearchValidation:
+    """Tests for topic search input validation."""
+
+    def test_search_empty_query_after_strip(self, test_app):
+        """Test that whitespace-only query returns 400."""
+        client, _, _ = test_app
+
+        response = client.get("/api/topic/%20%20%20")  # Just whitespace
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "empty" in data["message"].lower()
+
+    def test_search_query_too_long(self, test_app):
+        """Test that very long query is rejected."""
+        client, _, _ = test_app
+
+        long_query = "a" * 250
+        response = client.get(f"/api/topic/{long_query}")
+
+        assert response.status_code == 422
+
+
+class TestExceptionHandlers:
+    """Tests for exception handlers."""
+
+    def test_validation_error_response_format(self, test_app):
+        """Test validation error response format."""
+        client, _, _ = test_app
+
+        response = client.get("/api/recommendations", params={"limit": -5})
+
+        assert response.status_code == 422
+        data = response.json()
+        assert data["status"] == "error"
+        assert "Validation error" in data["message"]
+        assert "details" in data
+
+    def test_invalid_algorithm_type(self, test_app):
+        """Test invalid algorithm type returns validation error."""
+        client, _, _ = test_app
+
+        response = client.get("/api/recommendations", params={"algorithm": "invalid_algo"})
+
+        assert response.status_code == 422
+
+
 class TestCleanSummary:
     """Tests for the _clean_summary helper function."""
 
