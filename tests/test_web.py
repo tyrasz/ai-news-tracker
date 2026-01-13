@@ -201,7 +201,7 @@ class TestRecommendationsEndpoint:
         assert response.status_code == 422
 
         # Too high
-        response = client.get("/api/recommendations", params={"limit": 200})
+        response = client.get("/api/recommendations", params={"limit": 201})
         assert response.status_code == 422
 
 

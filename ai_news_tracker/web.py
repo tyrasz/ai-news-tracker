@@ -21,7 +21,7 @@ from .models import (
     User, UserArticleInteraction, UserProfile,
     get_user_by_api_key, get_or_create_interaction, get_or_create_user,
 )
-from .embeddings import EmbeddingEngine
+from .embeddings import EmbeddingEngine, bytes_to_embedding
 from .preferences import PreferenceLearner
 from .recommender import NewsRecommender
 from .logging_config import setup_logging, get_logger
@@ -104,6 +104,24 @@ class NoteResponse(BaseModel):
     highlight_text: Optional[str]
     created_at: Optional[str]
     updated_at: Optional[str]
+
+
+class DigestSourceSummary(BaseModel):
+    """Summary of articles from a single source in the digest."""
+    source: str
+    article_count: int
+    top_articles: List[ArticleResponse]
+
+
+class DailyDigestResponse(BaseModel):
+    """Daily digest summarizing recent articles."""
+    date: str
+    period_hours: int
+    total_articles: int
+    new_articles: int
+    sources: List[DigestSourceSummary]
+    top_stories: List[ArticleResponse]
+    reading_time_total: int
 
 
 async def periodic_wal_checkpoint():
@@ -331,7 +349,7 @@ def index():
 
 @app.get("/api/recommendations", response_model=List[ArticleResponse])
 def get_recommendations(
-    limit: int = Query(20, ge=1, le=100, description="Maximum number of articles to return"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of articles to return"),
     freshness_weight: float = Query(0.3, ge=0, le=1, description="Weight for freshness vs relevance (0=relevance only, 1=freshness only)"),
     include_read: bool = Query(False, description="Include articles already marked as read"),
     algorithm: AlgorithmType = Query(AlgorithmType.FOR_YOU, description="Recommendation algorithm to use"),
@@ -374,7 +392,7 @@ def get_algorithms():
 
 @app.get("/api/recommendations/grouped", response_model=List[ArticleGroupResponse])
 def get_recommendations_grouped(
-    limit: int = Query(20, ge=1, le=100, description="Maximum number of article groups to return"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of article groups to return"),
     freshness_weight: float = Query(0.3, ge=0, le=1, description="Weight for freshness vs relevance"),
     include_read: bool = Query(False, description="Include articles already marked as read"),
     algorithm: AlgorithmType = Query(AlgorithmType.FOR_YOU, description="Recommendation algorithm to use"),
@@ -424,7 +442,7 @@ def get_recommendations_grouped(
 @app.get("/api/topic/{query}", response_model=List[ArticleResponse])
 def search_topic(
     query: str = PathParam(..., min_length=1, max_length=200, description="Search query (1-200 characters)"),
-    limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of results"),
     freshness_weight: float = Query(0.2, ge=0, le=1, description="Weight for freshness vs relevance"),
     include_read: bool = Query(False, description="Include articles already marked as read"),
     min_relevance: float = Query(0.25, ge=0, le=1, description="Minimum similarity threshold to filter irrelevant results"),
@@ -766,6 +784,123 @@ def get_stats():
     assert recommender is not None, "Recommender not initialized"
     stats = recommender.get_stats()
     return StatsResponse(**stats)
+
+
+@app.get("/api/digest", response_model=DailyDigestResponse)
+def get_daily_digest(
+    hours: int = Query(24, ge=1, le=168, description="Number of hours to include in digest (1-168, default 24)"),
+    top_per_source: int = Query(3, ge=1, le=10, description="Number of top articles per source"),
+    top_stories: int = Query(10, ge=1, le=50, description="Number of top stories overall"),
+):
+    """
+    Get a daily digest summarizing recent articles.
+
+    Returns articles grouped by source with top stories highlighted.
+    """
+    assert db_session is not None, "Database session not initialized"
+    assert recommender is not None, "Recommender not initialized"
+
+    from datetime import timedelta
+    from collections import defaultdict
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+
+    # Get all articles from the period
+    articles = (
+        db_session.query(Article)
+        .filter(Article.fetched_at >= cutoff)
+        .order_by(Article.published_at.desc().nullslast())
+        .all()
+    )
+
+    # Count new (unread) articles
+    new_articles = sum(1 for a in articles if not a.is_read)
+
+    # Group by source
+    by_source = defaultdict(list)
+    for article in articles:
+        source = article.source or "Unknown"
+        by_source[source].append(article)
+
+    # Get personalized scores for top stories
+    scored_articles = []
+    has_prefs = recommender.preference_learner.get_preference_embedding(db_session) is not None
+    embedding_dim = recommender.embedding_engine.embedding_dim
+    if has_prefs:
+        for article in articles:
+            if article.embedding:
+                article_emb = bytes_to_embedding(article.embedding, embedding_dim)
+                score = recommender.preference_learner.compute_affinity_score(db_session, article_emb)
+                scored_articles.append((article, score))
+        scored_articles.sort(key=lambda x: x[1], reverse=True)
+    else:
+        # Fall back to recency
+        scored_articles = [(a, 0.5) for a in articles]
+
+    # Build source summaries
+    source_summaries = []
+    for source, source_articles in sorted(by_source.items(), key=lambda x: -len(x[1])):
+        # Sort by published date for top articles per source
+        source_articles.sort(key=lambda a: a.published_at or datetime.min, reverse=True)
+        top = source_articles[:top_per_source]
+
+        source_summaries.append(
+            DigestSourceSummary(
+                source=source,
+                article_count=len(source_articles),
+                top_articles=[
+                    ArticleResponse(
+                        id=a.id,
+                        title=a.title,
+                        url=a.url,
+                        source=a.source,
+                        author=a.author,
+                        summary=_clean_summary(a.summary),
+                        published_at=a.published_at.isoformat() if a.published_at else None,
+                        score=0.5,
+                        freshness=1.0,
+                        is_read=a.is_read or False,
+                        is_liked=a.is_liked,
+                        is_bookmarked=a.is_bookmarked or False,
+                        reading_time_minutes=a.reading_time_minutes,
+                    )
+                    for a in top
+                ],
+            )
+        )
+
+    # Build top stories list
+    top_story_list = [
+        ArticleResponse(
+            id=article.id,
+            title=article.title,
+            url=article.url,
+            source=article.source,
+            author=article.author,
+            summary=_clean_summary(article.summary),
+            published_at=article.published_at.isoformat() if article.published_at else None,
+            score=score,
+            freshness=1.0,
+            is_read=article.is_read or False,
+            is_liked=article.is_liked,
+            is_bookmarked=article.is_bookmarked or False,
+            reading_time_minutes=article.reading_time_minutes,
+        )
+        for article, score in scored_articles[:top_stories]
+    ]
+
+    # Calculate total reading time
+    total_reading_time = sum(a.reading_time_minutes for a in articles)
+
+    return DailyDigestResponse(
+        date=datetime.utcnow().strftime("%Y-%m-%d"),
+        period_hours=hours,
+        total_articles=len(articles),
+        new_articles=new_articles,
+        sources=source_summaries,
+        top_stories=top_story_list,
+        reading_time_total=total_reading_time,
+    )
 
 
 @app.post("/api/refresh")

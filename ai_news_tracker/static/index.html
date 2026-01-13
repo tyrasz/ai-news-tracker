@@ -365,6 +365,108 @@
             min-height: 20px;
         }
 
+        /* Daily Digest styles */
+        .digest-header {
+            background: linear-gradient(135deg, #1a2a3a 0%, #1a1a2a 100%);
+            border: 1px solid #2a3a4a;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .digest-header h2 {
+            font-size: 1.4rem;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+
+        .digest-stats {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+
+        .digest-stat {
+            text-align: center;
+        }
+
+        .digest-stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #4a9eff;
+        }
+
+        .digest-stat-label {
+            font-size: 0.8rem;
+            color: #888;
+            text-transform: uppercase;
+        }
+
+        .digest-section {
+            margin-bottom: 32px;
+        }
+
+        .digest-section-title {
+            font-size: 1.1rem;
+            color: #fff;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-group {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+
+        .source-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: #151515;
+            cursor: pointer;
+        }
+
+        .source-header:hover {
+            background: #1a1a1a;
+        }
+
+        .source-name {
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .source-count {
+            background: #2a3a4a;
+            color: #7ab8ff;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+        }
+
+        .source-articles {
+            padding: 0 20px 16px;
+        }
+
+        .source-articles .article {
+            border: none;
+            border-bottom: 1px solid #2a2a2a;
+            border-radius: 0;
+            padding: 16px 0;
+        }
+
+        .source-articles .article:last-child {
+            border-bottom: none;
+        }
+
         /* Grouped articles styles */
         .article-group {
             background: #1a1a1a;
@@ -509,6 +611,9 @@
                 <button class="algo-tab" data-algo="contrarian" onclick="selectAlgorithm('contrarian')">
                     <span class="algo-icon">&#128260;</span>Contrarian
                 </button>
+                <button class="algo-tab" data-algo="digest" onclick="selectAlgorithm('digest')" style="margin-left: auto;">
+                    <span class="algo-icon">&#128240;</span>Daily Digest
+                </button>
             </div>
             <div class="algo-description" id="algo-description">Personalized recommendations based on your reading history</div>
             <div class="controls">
@@ -551,7 +656,8 @@
             'deep_dive': 'Multiple articles on fewer topics for deeper understanding',
             'trending': 'Latest and freshest news, regardless of your preferences',
             'balanced': 'A balanced mix of personalized, fresh, and diverse content',
-            'contrarian': 'Challenge your views with different perspectives'
+            'contrarian': 'Challenge your views with different perspectives',
+            'digest': 'Summary of articles from the past 24 hours organized by source'
         };
 
         const algorithmTitles = {
@@ -560,7 +666,8 @@
             'deep_dive': 'Deep Dive',
             'trending': 'Trending',
             'balanced': 'Balanced',
-            'contrarian': 'Contrarian'
+            'contrarian': 'Contrarian',
+            'digest': 'Daily Digest'
         };
 
         console.log('AI News Tracker initializing...');
@@ -579,7 +686,7 @@
 
         function selectAlgorithm(algo) {
             currentAlgorithm = algo;
-            currentMode = 'recommendations';
+            currentMode = algo === 'digest' ? 'digest' : 'recommendations';
 
             // Update active tab
             document.querySelectorAll('.algo-tab').forEach(tab => {
@@ -592,8 +699,12 @@
             // Clear search
             document.getElementById('search-input').value = '';
 
-            // Load with new algorithm
-            loadRecommendations();
+            // Load with new algorithm or digest
+            if (algo === 'digest') {
+                loadDigest();
+            } else {
+                loadRecommendations();
+            }
         }
 
         function updateFreshness() {
@@ -603,7 +714,9 @@
         }
 
         function refresh() {
-            if (currentMode === 'recommendations') {
+            if (currentMode === 'digest') {
+                loadDigest();
+            } else if (currentMode === 'recommendations') {
                 loadRecommendations();
             } else {
                 searchTopic(currentQuery);
@@ -623,13 +736,13 @@
 
                 if (groupSimilar) {
                     console.log(`Fetching grouped from /api/recommendations/grouped with algorithm=${currentAlgorithm}...`);
-                    const response = await fetch(`/api/recommendations/grouped?limit=30&freshness_weight=${freshness}&include_read=${includeRead}&algorithm=${currentAlgorithm}`);
+                    const response = await fetch(`/api/recommendations/grouped?limit=50&freshness_weight=${freshness}&include_read=${includeRead}&algorithm=${currentAlgorithm}`);
                     const groups = await response.json();
                     console.log('Got article groups:', groups.length);
                     renderArticleGroups(groups, title);
                 } else {
                     console.log(`Fetching from /api/recommendations with algorithm=${currentAlgorithm}...`);
-                    const response = await fetch(`/api/recommendations?limit=30&freshness_weight=${freshness}&include_read=${includeRead}&algorithm=${currentAlgorithm}`);
+                    const response = await fetch(`/api/recommendations?limit=50&freshness_weight=${freshness}&include_read=${includeRead}&algorithm=${currentAlgorithm}`);
                     const articles = await response.json();
                     console.log('Got articles:', articles.length);
                     renderArticles(articles, title);
@@ -655,12 +768,134 @@
             showLoading();
 
             try {
-                const response = await fetch(`/api/topic/${encodeURIComponent(query)}?limit=30&freshness_weight=${freshness}&include_read=${includeRead}`);
+                const response = await fetch(`/api/topic/${encodeURIComponent(query)}?limit=50&freshness_weight=${freshness}&include_read=${includeRead}`);
                 const articles = await response.json();
                 renderArticles(articles, `Results for "${query}"`);
             } catch (error) {
                 showError('Failed to search');
             }
+        }
+
+        async function loadDigest() {
+            showLoading();
+
+            try {
+                const response = await fetch('/api/digest?hours=24&top_per_source=5&top_stories=15');
+                const digest = await response.json();
+                renderDigest(digest);
+            } catch (error) {
+                console.error('Error loading digest:', error);
+                showError('Failed to load daily digest');
+            }
+        }
+
+        function renderDigest(digest) {
+            const container = document.getElementById('articles');
+
+            // Format reading time
+            const hours = Math.floor(digest.reading_time_total / 60);
+            const mins = digest.reading_time_total % 60;
+            const readingTime = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+
+            let html = `
+                <div class="digest-header">
+                    <h2>Daily Digest - ${digest.date}</h2>
+                    <p style="color: #888;">Summary of the past ${digest.period_hours} hours</p>
+                    <div class="digest-stats">
+                        <div class="digest-stat">
+                            <div class="digest-stat-value">${digest.total_articles}</div>
+                            <div class="digest-stat-label">Total Articles</div>
+                        </div>
+                        <div class="digest-stat">
+                            <div class="digest-stat-value">${digest.new_articles}</div>
+                            <div class="digest-stat-label">Unread</div>
+                        </div>
+                        <div class="digest-stat">
+                            <div class="digest-stat-value">${digest.sources.length}</div>
+                            <div class="digest-stat-label">Sources</div>
+                        </div>
+                        <div class="digest-stat">
+                            <div class="digest-stat-value">${readingTime}</div>
+                            <div class="digest-stat-label">Reading Time</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Top Stories section
+            if (digest.top_stories.length > 0) {
+                html += `
+                    <div class="digest-section">
+                        <div class="digest-section-title">
+                            <span>&#11088;</span> Top Stories For You
+                        </div>
+                `;
+                digest.top_stories.forEach(article => {
+                    html += renderArticleCard(article);
+                });
+                html += '</div>';
+            }
+
+            // By Source section
+            html += `
+                <div class="digest-section">
+                    <div class="digest-section-title">
+                        <span>&#128196;</span> By Source
+                    </div>
+            `;
+
+            digest.sources.forEach(source => {
+                html += `
+                    <div class="source-group">
+                        <div class="source-header" onclick="this.parentElement.classList.toggle('expanded')">
+                            <span class="source-name">${source.source}</span>
+                            <span class="source-count">${source.article_count} articles</span>
+                        </div>
+                        <div class="source-articles">
+                `;
+                source.top_articles.forEach(article => {
+                    html += renderArticleCard(article);
+                });
+                html += '</div></div>';
+            });
+
+            html += '</div>';
+
+            container.innerHTML = html;
+        }
+
+        function renderArticleCard(article) {
+            const readClass = article.is_read ? 'read' : '';
+            const timeAgo = article.published_at ? formatTimeAgo(new Date(article.published_at)) : '';
+
+            return `
+                <article class="article ${readClass}" data-id="${article.id}">
+                    <div class="article-header">
+                        <div class="article-meta">
+                            ${article.source ? `<span class="source">${article.source}</span>` : ''}
+                            ${timeAgo ? `<span class="time">${timeAgo}</span>` : ''}
+                            <span class="reading-time">${article.reading_time_minutes} min read</span>
+                        </div>
+                    </div>
+                    <h3 class="article-title">
+                        <a href="${article.url}" target="_blank" onclick="markRead(${article.id})">${article.title}</a>
+                    </h3>
+                    ${article.summary ? `<p class="article-summary">${article.summary}</p>` : ''}
+                    <div class="article-footer">
+                        <div class="article-actions">
+                            <button class="action-btn ${article.is_liked === true ? 'active' : ''}" onclick="sendFeedback(${article.id}, true)" title="Like">
+                                &#128077;
+                            </button>
+                            <button class="action-btn ${article.is_liked === false ? 'active' : ''}" onclick="sendFeedback(${article.id}, false)" title="Dislike">
+                                &#128078;
+                            </button>
+                            <button class="action-btn ${article.is_bookmarked ? 'active' : ''}" onclick="toggleBookmark(${article.id})" title="Bookmark">
+                                ${article.is_bookmarked ? '&#128278;' : '&#128277;'}
+                            </button>
+                        </div>
+                    </div>
+                </article>
+            `;
         }
 
         async function loadStats() {
