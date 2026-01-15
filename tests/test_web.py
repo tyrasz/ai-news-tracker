@@ -671,3 +671,472 @@ class TestCleanSummary:
 
         result = _clean_summary("  Some text  ")
         assert result == "Some text"
+
+
+@pytest.fixture
+def auth_test_app():
+    """Create a test app with real database for auth tests."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    os.environ["NEWS_DB_PATH"] = db_path
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    # Add sample articles
+    now = datetime.utcnow()
+    for i in range(3):
+        embedding = np.random.randn(384).astype(np.float32)
+        article = Article(
+            url=f"https://example.com/article{i}",
+            title=f"Test Article {i}",
+            summary=f"Summary for article {i}",
+            source="Test Source",
+            published_at=now,
+            fetched_at=now,
+            embedding=embedding_to_bytes(embedding),
+        )
+        session.add(article)
+
+    session.commit()
+    session.close()
+    engine.dispose()
+
+    # Import app and patch dependencies
+    from ai_news_tracker.web import app
+
+    with patch("ai_news_tracker.web.recommender") as mock_recommender:
+        with patch("ai_news_tracker.web.db_session") as mock_db:
+            # Create a real session for auth tests
+            test_engine = create_engine(f"sqlite:///{db_path}")
+            TestSession = sessionmaker(bind=test_engine)
+            real_session = TestSession()
+
+            # Patch db_session to return the real session
+            import ai_news_tracker.web as web_module
+            web_module.db_session = real_session
+
+            mock_recommender.get_recommendations_v2.return_value = []
+            mock_recommender.list_algorithms.return_value = []
+
+            client = TestClient(app)
+
+            yield client, real_session, db_path
+
+            real_session.close()
+            test_engine.dispose()
+
+    try:
+        os.unlink(db_path)
+    except:
+        pass
+
+
+class TestAuthRegisterEndpoint:
+    """Tests for user registration endpoint."""
+
+    def test_register_user_success(self, auth_test_app):
+        """Test successful user registration."""
+        client, session, _ = auth_test_app
+
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "email": "newuser@example.com",
+                "password": "securepassword123",
+                "display_name": "New User",
+            }
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["email"] == "newuser@example.com"
+        assert data["display_name"] == "New User"
+        assert "api_key" in data
+        assert data["is_active"] is True
+
+    def test_register_duplicate_email(self, auth_test_app):
+        """Test registration with existing email fails."""
+        client, session, _ = auth_test_app
+
+        # Register first user
+        client.post(
+            "/api/auth/register",
+            json={
+                "email": "duplicate@example.com",
+                "password": "password123",
+            }
+        )
+
+        # Try to register again with same email
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "email": "duplicate@example.com",
+                "password": "different123",
+            }
+        )
+
+        assert response.status_code == 400
+        assert "already registered" in response.json()["message"]
+
+    def test_register_invalid_email(self, auth_test_app):
+        """Test registration with invalid email fails validation."""
+        client, _, _ = auth_test_app
+
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "email": "ab",  # Too short
+                "password": "password123",
+            }
+        )
+
+        assert response.status_code == 422
+
+    def test_register_short_password(self, auth_test_app):
+        """Test registration with short password fails."""
+        client, _, _ = auth_test_app
+
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "email": "test@example.com",
+                "password": "short",  # Too short
+            }
+        )
+
+        assert response.status_code == 422
+
+
+class TestAuthLoginEndpoint:
+    """Tests for user login endpoint."""
+
+    def test_login_success(self, auth_test_app):
+        """Test successful login."""
+        client, session, _ = auth_test_app
+
+        # First register a user
+        client.post(
+            "/api/auth/register",
+            json={
+                "email": "login@example.com",
+                "password": "password123",
+            }
+        )
+
+        # Now login
+        response = client.post(
+            "/api/auth/login",
+            json={
+                "email": "login@example.com",
+                "password": "password123",
+            }
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["email"] == "login@example.com"
+        assert "api_key" in data
+
+    def test_login_wrong_password(self, auth_test_app):
+        """Test login with wrong password fails."""
+        client, session, _ = auth_test_app
+
+        # Register user
+        client.post(
+            "/api/auth/register",
+            json={
+                "email": "wrongpass@example.com",
+                "password": "correctpassword",
+            }
+        )
+
+        # Login with wrong password
+        response = client.post(
+            "/api/auth/login",
+            json={
+                "email": "wrongpass@example.com",
+                "password": "wrongpassword",
+            }
+        )
+
+        assert response.status_code == 401
+        assert "Invalid email or password" in response.json()["message"]
+
+    def test_login_nonexistent_user(self, auth_test_app):
+        """Test login with non-existent email fails."""
+        client, _, _ = auth_test_app
+
+        response = client.post(
+            "/api/auth/login",
+            json={
+                "email": "nonexistent@example.com",
+                "password": "anypassword",
+            }
+        )
+
+        assert response.status_code == 401
+
+
+class TestAuthMeEndpoint:
+    """Tests for current user endpoint."""
+
+    def test_get_me_authenticated(self, auth_test_app):
+        """Test getting current user when authenticated."""
+        client, session, _ = auth_test_app
+
+        # Register and get API key
+        reg_response = client.post(
+            "/api/auth/register",
+            json={
+                "email": "me@example.com",
+                "password": "password123",
+            }
+        )
+        api_key = reg_response.json()["api_key"]
+
+        # Get current user with API key
+        response = client.get(
+            "/api/auth/me",
+            headers={"X-API-Key": api_key}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["email"] == "me@example.com"
+
+    def test_get_me_unauthenticated(self, auth_test_app):
+        """Test getting current user without auth fails."""
+        client, _, _ = auth_test_app
+
+        response = client.get("/api/auth/me")
+
+        assert response.status_code == 401
+
+    def test_get_me_invalid_key(self, auth_test_app):
+        """Test getting current user with invalid key fails."""
+        client, _, _ = auth_test_app
+
+        response = client.get(
+            "/api/auth/me",
+            headers={"X-API-Key": "invalid-api-key"}
+        )
+
+        assert response.status_code == 401
+
+
+class TestAuthRegenerateKeyEndpoint:
+    """Tests for API key regeneration endpoint."""
+
+    def test_regenerate_key_success(self, auth_test_app):
+        """Test successful API key regeneration."""
+        client, session, _ = auth_test_app
+
+        # Register and get API key
+        reg_response = client.post(
+            "/api/auth/register",
+            json={
+                "email": "regen@example.com",
+                "password": "password123",
+            }
+        )
+        old_api_key = reg_response.json()["api_key"]
+
+        # Regenerate key
+        response = client.post(
+            "/api/auth/regenerate-key",
+            headers={"X-API-Key": old_api_key}
+        )
+
+        assert response.status_code == 200
+        new_api_key = response.json()["api_key"]
+        assert new_api_key != old_api_key
+
+    def test_regenerate_key_unauthenticated(self, auth_test_app):
+        """Test regenerating key without auth fails."""
+        client, _, _ = auth_test_app
+
+        response = client.post("/api/auth/regenerate-key")
+
+        assert response.status_code == 401
+
+
+class TestBookmarkEndpoints:
+    """Tests for bookmark endpoints."""
+
+    def test_toggle_bookmark(self, test_app):
+        """Test toggling bookmark on an article."""
+        client, mock_recommender, db_path = test_app
+
+        # Mock the database query
+        with patch("ai_news_tracker.web.db_session") as mock_db:
+            mock_article = MagicMock()
+            mock_article.is_bookmarked = False
+            mock_db.query.return_value.get.return_value = mock_article
+
+            response = client.post("/api/bookmark/1")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "ok"
+            assert data["article_id"] == 1
+
+    def test_toggle_bookmark_not_found(self, test_app):
+        """Test toggling bookmark on non-existent article."""
+        client, _, db_path = test_app
+
+        with patch("ai_news_tracker.web.db_session") as mock_db:
+            mock_db.query.return_value.get.return_value = None
+
+            response = client.post("/api/bookmark/999")
+
+            assert response.status_code == 404
+
+    def test_get_bookmarks_empty(self, test_app):
+        """Test getting bookmarks when none exist."""
+        client, _, db_path = test_app
+
+        with patch("ai_news_tracker.web.db_session") as mock_db:
+            mock_db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+
+            response = client.get("/api/bookmarks")
+
+            assert response.status_code == 200
+            assert response.json() == []
+
+
+class TestNoteEndpoints:
+    """Tests for note endpoints."""
+
+    def test_create_note(self, test_app):
+        """Test creating a note for an article."""
+        client, _, db_path = test_app
+
+        with patch("ai_news_tracker.web.db_session") as mock_db:
+            mock_article = MagicMock()
+            mock_article.id = 1
+            mock_db.query.return_value.get.return_value = mock_article
+
+            # Mock the note creation
+            mock_note = MagicMock()
+            mock_note.id = 1
+            mock_note.article_id = 1
+            mock_note.content = "Test note"
+            mock_note.highlight_text = None
+            mock_note.created_at = datetime.utcnow()
+            mock_note.updated_at = None
+
+            def add_note(note):
+                note.id = 1
+                note.created_at = datetime.utcnow()
+
+            mock_db.add.side_effect = add_note
+
+            response = client.post(
+                "/api/article/1/notes",
+                json={"content": "Test note"}
+            )
+
+            assert response.status_code == 200
+
+    def test_create_note_article_not_found(self, test_app):
+        """Test creating note for non-existent article."""
+        client, _, db_path = test_app
+
+        with patch("ai_news_tracker.web.db_session") as mock_db:
+            mock_db.query.return_value.get.return_value = None
+
+            response = client.post(
+                "/api/article/999/notes",
+                json={"content": "Test note"}
+            )
+
+            assert response.status_code == 404
+
+    def test_get_article_notes(self, test_app):
+        """Test getting notes for an article."""
+        client, _, db_path = test_app
+
+        with patch("ai_news_tracker.web.db_session") as mock_db:
+            mock_note = MagicMock()
+            mock_note.id = 1
+            mock_note.article_id = 1
+            mock_note.content = "A note"
+            mock_note.highlight_text = None
+            mock_note.created_at = datetime.utcnow()
+            mock_note.updated_at = None
+
+            mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = [mock_note]
+
+            response = client.get("/api/article/1/notes")
+
+            assert response.status_code == 200
+
+
+class TestSchedulerEndpoints:
+    """Tests for scheduler status endpoints."""
+
+    def test_get_scheduler_status(self, test_app):
+        """Test getting scheduler status."""
+        client, _, _ = test_app
+
+        with patch("ai_news_tracker.web.feed_scheduler") as mock_scheduler:
+            mock_scheduler.get_status.return_value = {
+                "enabled": True,
+                "running": True,
+                "interval_minutes": 30,
+                "last_refresh": None,
+                "next_refresh": "2024-01-15T12:00:00",
+                "refresh_count": 5,
+                "error_count": 0,
+                "last_error": None,
+            }
+
+            response = client.get("/api/scheduler/status")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["enabled"] is True
+            assert data["interval_minutes"] == 30
+
+
+class TestDigestEndpoint:
+    """Tests for daily digest endpoint."""
+
+    def test_get_digest(self, test_app):
+        """Test getting daily digest."""
+        client, mock_recommender, _ = test_app
+
+        mock_recommender.get_daily_digest.return_value = {
+            "date": "2024-01-15",
+            "top_stories": [],
+            "by_category": {},
+            "stats": {"total": 0},
+        }
+
+        response = client.get("/api/digest")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "date" in data or "top_stories" in data or "status" in data
+
+
+class TestHeadlinesEndpoint:
+    """Tests for top headlines endpoint."""
+
+    def test_get_headlines(self, test_app):
+        """Test getting top headlines."""
+        client, mock_recommender, _ = test_app
+
+        mock_recommender.get_top_headlines.return_value = []
+
+        response = client.get("/api/headlines")
+
+        assert response.status_code == 200
