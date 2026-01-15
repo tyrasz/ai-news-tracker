@@ -124,6 +124,24 @@ class DailyDigestResponse(BaseModel):
     reading_time_total: int
 
 
+class HeadlineArticle(BaseModel):
+    """Article formatted for headlines display."""
+    id: int
+    title: str
+    url: str
+    source: Optional[str]
+    published_at: Optional[str]
+    heat_score: float
+    is_read: bool
+    reading_time_minutes: int
+
+
+class HeadlinesResponse(BaseModel):
+    """Top headlines response."""
+    headlines: List[HeadlineArticle]
+    updated_at: str
+
+
 async def periodic_wal_checkpoint():
     """Periodically checkpoint WAL to prevent unbounded growth."""
     while True:
@@ -784,6 +802,94 @@ def get_stats():
     assert recommender is not None, "Recommender not initialized"
     stats = recommender.get_stats()
     return StatsResponse(**stats)
+
+
+@app.get("/api/headlines", response_model=HeadlinesResponse)
+def get_headlines(
+    limit: int = Query(5, ge=1, le=20, description="Number of headlines to return"),
+    hours: int = Query(12, ge=1, le=48, description="Look back period in hours"),
+):
+    """
+    Get top headlines based on heat scoring.
+
+    Heat score combines freshness (how recently published) with source diversity.
+    Returns the hottest news stories from the specified time period.
+    """
+    assert db_session is not None, "Database session not initialized"
+
+    from datetime import timedelta
+    from collections import Counter
+    import math
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    now = datetime.utcnow()
+
+    # Get recent articles
+    articles = (
+        db_session.query(Article)
+        .filter(Article.fetched_at >= cutoff)
+        .filter(Article.published_at != None)  # noqa: E711
+        .order_by(Article.published_at.desc())
+        .limit(200)  # Get more than needed for scoring
+        .all()
+    )
+
+    if not articles:
+        return HeadlinesResponse(
+            headlines=[],
+            updated_at=now.isoformat(),
+        )
+
+    # Calculate heat scores
+    scored = []
+    source_counts = Counter(a.source for a in articles)
+
+    for article in articles:
+        if not article.published_at:
+            continue
+
+        # Time decay - articles lose heat over time (half-life of 6 hours)
+        age_hours = (now - article.published_at).total_seconds() / 3600
+        freshness = math.exp(-0.115 * age_hours)  # ~50% at 6 hours
+
+        # Source diversity bonus - boost sources with fewer articles (more unique stories)
+        source_count = source_counts.get(article.source, 1)
+        diversity_bonus = 1.0 / math.sqrt(source_count)
+
+        # Combine into heat score
+        heat_score = freshness * (0.7 + 0.3 * diversity_bonus)
+
+        scored.append((article, heat_score))
+
+    # Sort by heat and take top headlines
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    # Deduplicate by source (max 2 per source in headlines)
+    headlines: List[HeadlineArticle] = []
+    source_used: Counter[Optional[str]] = Counter()
+    for article, heat in scored:
+        if source_used[article.source] >= 2:
+            continue
+        source_used[article.source] += 1
+        headlines.append(
+            HeadlineArticle(
+                id=article.id,
+                title=article.title,
+                url=article.url,
+                source=article.source,
+                published_at=article.published_at.isoformat() if article.published_at else None,
+                heat_score=round(heat, 3),
+                is_read=article.is_read or False,
+                reading_time_minutes=article.reading_time_minutes,
+            )
+        )
+        if len(headlines) >= limit:
+            break
+
+    return HeadlinesResponse(
+        headlines=headlines,
+        updated_at=now.isoformat(),
+    )
 
 
 @app.get("/api/digest", response_model=DailyDigestResponse)

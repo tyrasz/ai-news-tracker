@@ -467,6 +467,92 @@
             border-bottom: none;
         }
 
+        /* Headlines banner styles */
+        .headlines-banner {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 1px solid #e94560;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+
+        .headlines-banner h2 {
+            color: #e94560;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .headlines-banner h2::before {
+            content: "";
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #e94560;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .headline-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid #2a2a3e;
+        }
+
+        .headline-item:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .headline-rank {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #e94560;
+            min-width: 24px;
+        }
+
+        .headline-content {
+            flex: 1;
+        }
+
+        .headline-title {
+            font-size: 1rem;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .headline-title a {
+            color: #fff;
+            text-decoration: none;
+        }
+
+        .headline-title a:hover {
+            color: #e94560;
+        }
+
+        .headline-meta {
+            font-size: 0.8rem;
+            color: #888;
+            display: flex;
+            gap: 12px;
+        }
+
+        .headline-heat {
+            color: #e94560;
+            font-weight: 500;
+        }
+
         /* Grouped articles styles */
         .article-group {
             background: #1a1a1a;
@@ -635,6 +721,10 @@
     </header>
 
     <main class="container">
+        <div class="headlines-banner" id="headlines-banner" style="display: none;">
+            <h2>Top Headlines</h2>
+            <div id="headlines-content"></div>
+        </div>
         <div class="articles" id="articles">
             <div class="loading">
                 <div class="spinner"></div>
@@ -675,6 +765,7 @@
         // Load recommendations on page load
         document.addEventListener('DOMContentLoaded', () => {
             console.log('DOM loaded, fetching recommendations...');
+            loadHeadlines();
             loadRecommendations();
             loadStats();
         });
@@ -909,6 +1000,43 @@
                 `;
             } catch (error) {
                 console.error('Failed to load stats');
+            }
+        }
+
+        async function loadHeadlines() {
+            try {
+                const response = await fetch('/api/headlines?limit=5&hours=12');
+                const data = await response.json();
+
+                if (data.headlines && data.headlines.length > 0) {
+                    const banner = document.getElementById('headlines-banner');
+                    const content = document.getElementById('headlines-content');
+
+                    let html = '';
+                    data.headlines.forEach((headline, index) => {
+                        const timeAgo = headline.published_at ? formatTimeAgo(new Date(headline.published_at)) : '';
+                        html += `
+                            <div class="headline-item">
+                                <span class="headline-rank">${index + 1}</span>
+                                <div class="headline-content">
+                                    <div class="headline-title">
+                                        <a href="${headline.url}" target="_blank" onclick="markRead(${headline.id})">${headline.title}</a>
+                                    </div>
+                                    <div class="headline-meta">
+                                        ${headline.source ? `<span>${headline.source}</span>` : ''}
+                                        ${timeAgo ? `<span>${timeAgo}</span>` : ''}
+                                        <span class="headline-heat">${Math.round(headline.heat_score * 100)}% hot</span>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    content.innerHTML = html;
+                    banner.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Failed to load headlines:', error);
             }
         }
 
